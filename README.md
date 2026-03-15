@@ -1,12 +1,12 @@
 # autoresearch
 
-Autonomous LLM research loops — give an AI agent a training setup and let it experiment overnight.
+Autonomous LLM research loops — give an AI agent a training setup and let it explore the hyperparameter space.
 This repo contains two independent modules, each a self-contained autonomous search loop.
 
 ## autoresearch (Karpathy's original autoresearch framework)
 
 An agent edits `train.py` to modify GPT architecture and hyperparameters, trains
-for a fixed 5-minute budget, checks if `val_bpb` improved, and repeats. See
+for a fixed 5-minute budget, checks if `val_bpb` , aka model-agnostic perplexity, has improved, and repeats. See
 [`autoresearch/README.md`](autoresearch/README.md) for full details.
 
 ```bash
@@ -19,14 +19,14 @@ uv run autoresearch/train.py          # verify setup (~5 min)
 
 ## autoresearch-unsloth (LoRA hyperparameter search)
 
-An agent edits the hyperparameters section of `train_unsloth.py` — LoRA rank, learning rate,
-scheduler, and more — trains for 200 gradient steps on the Alpaca instruction-following task,
-checks if `eval_loss` improved, and repeats.
+An agent edits the hyperparameters section of `train_unsloth.py` — LoRA rank, learning rate, base model,
+scheduler, and more — trains for 200 gradient steps on the designed benchmark task,
+checks if `eval_loss`, or your custom defined metric on the evaluation set, has improved, and repeats.
 
 ```bash
 uv sync --extra unsloth
 uv run autoresearch_unsloth/prepare_unsloth.py   # one-time: download dataset (~1 min)
-uv run autoresearch_unsloth/train_unsloth.py     # verify setup; downloads model on first run (~5 min)
+uv run autoresearch_unsloth/train_unsloth.py     # verify setup; downloads model on first run if not already cached
 ```
 
 **Requirements:** Single NVIDIA GPU, Python 3.10+, [uv](https://docs.astral.sh/uv/).
@@ -49,8 +49,7 @@ Have a look at autoresearch_unsloth/program_unsloth.md and let's kick off a new 
 ## Visualizing progress
 
 ```bash
-uv run autoresearch_unsloth/plot_progress.py
-# outputs autoresearch_unsloth/progress_unsloth.png
+uv run autoresearch_unsloth/plot_progress.py # output the progress chart progress_unsloth.png
 ```
 
 ## References
