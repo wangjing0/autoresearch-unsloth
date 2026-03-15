@@ -66,12 +66,24 @@ Spin up Claude Code (or any coding agent) in this repo, then prompt:
 Have a look at autoresearch_unsloth/program_unsloth.md and let's kick off a new experiment.
 ```
 
+## Visualizing progress
+
+After experiments have run, generate a progress chart (mirrors the root `progress.png` style):
+
+```bash
+uv run autoresearch_unsloth/plot_progress.py
+# outputs autoresearch_unsloth/progress_unsloth.png
+```
+
+Pass `--results` or `--out` to override the default paths.
+
 ## Project structure
 
 ```
 prepare_unsloth.py   — model download + dataset prep (do not modify)
 train_unsloth.py     — LoRA config + training loop (agent modifies this)
 program_unsloth.md   — agent instructions
+plot_progress.py     — visualize results_unsloth.tsv → progress_unsloth.png
 ```
 
 Cache layout under `~/.cache/autoresearch_unsloth/`:
