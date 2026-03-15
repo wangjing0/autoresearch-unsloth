@@ -4,8 +4,8 @@ Downloads the base model snapshot and prepares the alpaca-gpt4 fine-tuning datas
 
 Usage:
     uv run autoresearch_unsloth/prepare_unsloth.py
-    uv run autoresearch_unsloth/prepare_unsloth.py --model unsloth/Llama-3.2-1B-Instruct
-    uv run autoresearch_unsloth/prepare_unsloth.py --model meta-llama/Llama-3.1-8B-Instruct --token hf_...
+    uv run autoresearch_unsloth/prepare_unsloth.py --model unsloth/Qwen2.5-0.5B-Instruct
+    uv run autoresearch_unsloth/prepare_unsloth.py --model unsloth/Qwen2.5-0.5B-Instruct --token hf_...
 
 The model name becomes a slug used as the cache subdirectory, so multiple models
 can coexist under ~/.cache/autoresearch_unsloth/models/.
@@ -23,7 +23,7 @@ from huggingface_hub import snapshot_download
 # ---------------------------------------------------------------------------
 
 DEFAULT_MODEL_NAME = "unsloth/Qwen2.5-0.5B-Instruct"
-DATASET_NAME       = "vicgalle/alpaca-gpt4"
+DATASET_NAME       = "unsloth/alpaca-cleaned"
 EVAL_SPLIT_RATIO   = 0.05   # 5% held out for validation
 RANDOM_SEED        = 42
 

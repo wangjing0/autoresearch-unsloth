@@ -1,7 +1,7 @@
 # autoresearch-unsloth
 
 Autonomous LoRA hyperparameter search using Unsloth. The agent iterates overnight to find
-the best fine-tuning hyperparameters for a given base model on the Alpaca instruction-following task.
+the best fine-tuning hyperparameters on the benchmark dataset.
 
 ## Setup
 
@@ -11,14 +11,21 @@ To set up a new experiment, work with the user to:
    `autoresearch-unsloth/<tag>` must not already exist — this is a fresh run.
 2. **Create the branch**: `git checkout -b autoresearch-unsloth/<tag>` from current master.
 3. **Read the in-scope files**:
-   - `autoresearch_unsloth/prepare_unsloth.py` — fixed constants: model name, dataset, cache paths. Do not modify.
-   - `autoresearch_unsloth/train_unsloth.py` — the file you modify. Hyperparameters section at the top.
+   - `autoresearch_unsloth/prepare_unsloth.py` — fixed constants: dataset, cache paths. Do not modify.
+   - `autoresearch_unsloth/train_unsloth.py` — the file you modify. Hyperparameters section at the top,
+     including `CANDIDATE_MODELS` (the allowed base models) and `MODEL_NAME` (active selection).
    - `unsloth/references/llms-full.md` — Unsloth documentation. Search for the LoRA hyperparameters
      section to understand the search space and tuning guidance before starting.
 4. **Verify data exists**: Check that `~/.cache/autoresearch_unsloth/` contains `models/<model-slug>/`
-   and `dataset/`. If not, tell the human to run:
+   and `dataset/`. Each entry in `CANDIDATE_MODELS` must have its own slug directory. If any is missing,
+   tell the human to run:
    `uv run autoresearch_unsloth/prepare_unsloth.py --model <MODEL_NAME>`
-   The model slug is the repo ID with `/` replaced by `--` (e.g. `unsloth--Qwen2.5-0.5B-Instruct`).
+   for each missing model. The slug is the repo ID with `/` replaced by `--`
+   (e.g. `unsloth--Qwen2.5-0.5B-Instruct`).
+
+   Current candidates and required slugs:
+   - `unsloth/Qwen2.5-0.5B-Instruct`  →  `unsloth--Qwen2.5-0.5B-Instruct`
+   - `unsloth/Llama-3.2-1B-Instruct`  →  `unsloth--Llama-3.2-1B-Instruct`
 5. **Initialize results_unsloth.tsv**: Create `autoresearch_unsloth/results_unsloth.tsv` with the header row only.
 6. **Confirm and go**.
 
@@ -33,17 +40,20 @@ uv run autoresearch_unsloth/train_unsloth.py > run.log 2>&1
 
 **What you CAN do:**
 
-- Modify `autoresearch_unsloth/train_unsloth.py` — the hyperparameters section only. All LoRA and optimizer
-  hyperparameters are fair game: LORA_R, LORA_ALPHA, LORA_DROPOUT, LEARNING_RATE, BATCH_SIZE,
-  GRAD_ACCUM_STEPS, WARMUP_STEPS, WEIGHT_DECAY, LR_SCHEDULER, USE_RSLORA, TARGET_MODULES.
+- Modify `autoresearch_unsloth/train_unsloth.py` — the hyperparameters section only. All LoRA, optimizer,
+  and base-model hyperparameters are fair game: MODEL_NAME, LORA_R, LORA_ALPHA, LORA_DROPOUT,
+  LEARNING_RATE, BATCH_SIZE, GRAD_ACCUM_STEPS, WARMUP_STEPS, WEIGHT_DECAY, LR_SCHEDULER, USE_RSLORA,
+  TARGET_MODULES.
+- Set `MODEL_NAME` to any entry in `CANDIDATE_MODELS`. Treat the base model as one more axis of the
+  search space — switch models when the current one appears to have plateaued.
 
 **What you CANNOT do:**
 
 - Modify `autoresearch_unsloth/prepare_unsloth.py`. It is read-only.
-- Change the fixed constants in `train_unsloth.py`: MODEL_NAME (unless switching to a model the
-  human has already prepared), MAX_SEQ_LEN, EVAL_STEPS, MAX_STEPS, CACHE_DIR, DATASET_DIR, ALPACA_PROMPT.
-  If the human wants to switch base models, they must first run `prepare_unsloth.py --model <name>`
-  to download it, then you may update MODEL_NAME accordingly.
+- Set `MODEL_NAME` to a value not listed in `CANDIDATE_MODELS`. Every candidate must already be cached
+  on disk (verified in step 4 of Setup). Do not attempt to download models yourself.
+- Change the fixed constants in `train_unsloth.py`: MAX_SEQ_LEN, EVAL_STEPS, MAX_STEPS, DATASET_DIR,
+  ALPACA_PROMPT.
 - Install new packages or add dependencies.
 - Change the evaluation metric or output format.
 
@@ -52,19 +62,20 @@ lower is better).
 
 **The search space** — hyperparameters to explore, guided by the Unsloth LoRA guide:
 
-| Parameter         | Typical range / options                          |
-|-------------------|--------------------------------------------------|
-| LORA_R            | 4, 8, 16, 32, 64, 128                            |
-| LORA_ALPHA        | r, 2*r (rule: keep alpha/r >= 1)                 |
-| LEARNING_RATE     | 5e-5 to 5e-4 (LoRA default: 2e-4)               |
-| GRAD_ACCUM_STEPS  | 1, 2, 4, 8 (tune effective batch size)           |
-| BATCH_SIZE        | 1, 2, 4                                          |
-| WARMUP_STEPS      | 0, 10, 20, 50                                    |
-| WEIGHT_DECAY      | 0.0, 0.01, 0.05, 0.1                             |
-| LR_SCHEDULER      | "linear", "cosine", "cosine_with_restarts"       |
-| USE_RSLORA        | False, True (True scales by alpha/sqrt(r))       |
-| LORA_DROPOUT      | 0.0, 0.05, 0.1                                   |
-| TARGET_MODULES    | add/remove modules (e.g. drop MLP projections)   |
+| Parameter         | Typical range / options                                           |
+|-------------------|-------------------------------------------------------------------|
+| MODEL_NAME        | any entry from CANDIDATE_MODELS (see train_unsloth.py)           |
+| LORA_R            | 4, 8, 16, 32, 64, 128                                            |
+| LORA_ALPHA        | r, 2*r (rule: keep alpha/r >= 1)                                 |
+| LEARNING_RATE     | 5e-5 to 5e-4 (LoRA default: 2e-4)                               |
+| GRAD_ACCUM_STEPS  | 1, 2, 4, 8 (tune effective batch size)                           |
+| BATCH_SIZE        | 1, 2, 4                                                          |
+| WARMUP_STEPS      | 0, 10, 20, 50                                                    |
+| WEIGHT_DECAY      | 0.0, 0.01, 0.05, 0.1                                             |
+| LR_SCHEDULER      | "linear", "cosine", "cosine_with_restarts"                       |
+| USE_RSLORA        | False, True (True scales by alpha/sqrt(r))                       |
+| LORA_DROPOUT      | 0.0, 0.05, 0.1                                                   |
+| TARGET_MODULES    | add/remove modules (e.g. drop MLP projections)                   |
 
 **VRAM** is a soft constraint. Some increase is acceptable for meaningful eval_loss gains.
 
@@ -80,6 +91,7 @@ When the script finishes it prints:
 
 ```
 ---
+model_name:       unsloth/Qwen2.5-0.5B-Instruct
 eval_loss:        1.234567
 perplexity:       3.437
 peak_vram_mb:     12345.0
@@ -92,36 +104,38 @@ effective_batch:  8
 use_rslora:       False
 ```
 
-Extract the key metric from the log:
+Extract the key metrics from the log:
 
 ```
-grep "^eval_loss:\|^peak_vram_mb:" run.log
+grep "^model_name:\|^eval_loss:\|^peak_vram_mb:" run.log
 ```
 
 ## Logging results
 
 Log experiments to `autoresearch_unsloth/results_unsloth.tsv` (tab-separated, NOT comma-separated).
 
-Header and 5 columns:
+Header and 6 columns:
 
 ```
-commit	eval_loss	vram_gb	status	description
+commit	model_name	eval_loss	vram_gb	status	description
 ```
 
 1. git commit hash (short, 7 chars)
-2. eval_loss achieved (e.g. 1.234567) — use 0.000000 for crashes
-3. peak VRAM in GB, round to .1f (divide peak_vram_mb by 1024) — use 0.0 for crashes
-4. status: `keep`, `discard`, or `crash`
-5. short description of what this experiment tried
+2. model_name — the value of MODEL_NAME used in this run (e.g. `unsloth/Qwen2.5-0.5B-Instruct`)
+3. eval_loss achieved (e.g. 1.234567) — use 0.000000 for crashes
+4. peak VRAM in GB, round to .1f (divide peak_vram_mb by 1024) — use 0.0 for crashes
+5. status: `keep`, `discard`, or `crash`
+6. short description of what this experiment tried
 
 Example:
 
 ```
-commit	eval_loss	vram_gb	status	description
-a1b2c3d	1.234567	4.2	keep	baseline r=16 alpha=32 lr=2e-4
-b2c3d4e	1.198432	4.2	keep	increase lr to 3e-4
-c3d4e5f	1.245000	4.2	discard	switch to linear scheduler
-d4e5f6g	0.000000	0.0	crash	r=128 alpha=256 OOM
+commit	model_name	eval_loss	vram_gb	status	description
+a1b2c3d	unsloth/Qwen2.5-0.5B-Instruct	1.234567	4.2	keep	baseline r=16 alpha=32 lr=2e-4
+b2c3d4e	unsloth/Qwen2.5-0.5B-Instruct	1.198432	4.2	keep	increase lr to 3e-4
+c3d4e5f	unsloth/Qwen2.5-0.5B-Instruct	1.245000	4.2	discard	switch to linear scheduler
+d4e5f6g	unsloth/Llama-3.2-1B-Instruct	1.187000	5.1	keep	switch base model
+e5f6g7h	unsloth/Llama-3.2-1B-Instruct	0.000000	0.0	crash	r=128 alpha=256 OOM
 ```
 
 Do not commit `results_unsloth.tsv` — leave it untracked by git.
@@ -134,7 +148,8 @@ LOOP FOREVER:
 
 1. Review the current git state and results so far.
 2. Formulate a hypothesis: pick ONE hyperparameter (or a small related set) to change, justify it
-   using the Unsloth LoRA guide and observed trends in results_unsloth.tsv.
+   using the Unsloth LoRA guide and observed trends in results_unsloth.tsv. MODEL_NAME is a valid
+   choice — switch base models when the current one has plateaued.
 3. Edit the hyperparameters section of `autoresearch_unsloth/train_unsloth.py`.
 4. `git commit`
 5. Run: `uv run autoresearch_unsloth/train_unsloth.py > run.log 2>&1`

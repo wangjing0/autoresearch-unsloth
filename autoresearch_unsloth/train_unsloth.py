@@ -16,10 +16,18 @@ from datasets import load_from_disk
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel, is_bfloat16_supported
 
+# Candidate base models — run prepare_unsloth.py for each before training.
+# The agent selects one entry from this list and assigns it to MODEL_NAME.
+CANDIDATE_MODELS = [
+    "unsloth/Qwen2.5-0.5B-Instruct",   
+    "unsloth/Llama-3.2-1B-Instruct", 
+]
+
 # ---------------------------------------------------------------------------
 # Hyperparameters (agent edits this section directly, no CLI flags needed)
 # ---------------------------------------------------------------------------
 
+MODEL_NAME       = "unsloth/Qwen2.5-0.5B-Instruct"  # must be one entry from CANDIDATE_MODELS
 LORA_R           = 16
 LORA_ALPHA       = 32       # typically r or 2*r; formula: update_scale = alpha/r
 LORA_DROPOUT     = 0.0      # 0 is optimized in Unsloth; try 0.05-0.1 to combat overfitting
@@ -40,7 +48,6 @@ TARGET_MODULES   = [        # attention + MLP projection layers
 # Fixed — do not modify
 # ---------------------------------------------------------------------------
 
-MODEL_NAME  = DEFAULT_MODEL_NAME   # change only after running prepare_unsloth.py --model <name>
 MODEL_DIR   = model_dir(MODEL_NAME)
 # DATASET_DIR imported from prepare_unsloth
 MAX_SEQ_LEN = 1024
@@ -161,6 +168,7 @@ training_seconds = t_end - t_start_training
 effective_batch  = BATCH_SIZE * GRAD_ACCUM_STEPS
 
 print("---")
+print(f"model_name:       {MODEL_NAME}")
 print(f"eval_loss:        {eval_loss:.6f}")
 print(f"perplexity:       {perplexity:.3f}")
 print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
