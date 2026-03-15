@@ -16,16 +16,11 @@ To set up a new experiment, work with the user to:
      including `CANDIDATE_MODELS` (the allowed base models) and `MODEL_NAME` (active selection).
    - `unsloth/references/llms-full.md` — Unsloth documentation. Search for the LoRA hyperparameters
      section to understand the search space and tuning guidance before starting.
-4. **Verify data exists**: Check that `~/.cache/autoresearch_unsloth/` contains `models/<model-slug>/`
-   and `dataset/`. Each entry in `CANDIDATE_MODELS` must have its own slug directory. If any is missing,
-   tell the human to run:
-   `uv run autoresearch_unsloth/prepare_unsloth.py --model <MODEL_NAME>`
-   for each missing model. The slug is the repo ID with `/` replaced by `--`
-   (e.g. `unsloth--Qwen2.5-0.5B-Instruct`).
-
-   Current candidates and required slugs:
-   - `unsloth/Qwen2.5-0.5B-Instruct`  →  `unsloth--Qwen2.5-0.5B-Instruct`
-   - `unsloth/Llama-3.2-1B-Instruct`  →  `unsloth--Llama-3.2-1B-Instruct`
+4. **Verify dataset exists**: Check that `~/.cache/autoresearch_unsloth/dataset/` exists.
+   If not, tell the human to run:
+   `uv run autoresearch_unsloth/prepare_unsloth.py`
+   Base models are downloaded automatically by `train_unsloth.py` on first use — no
+   manual model download is required. Set `HF_TOKEN` in the environment for gated models.
 5. **Initialize results_unsloth.tsv**: Create `autoresearch_unsloth/results_unsloth.tsv` with the header row only.
 6. **Confirm and go**.
 
@@ -45,13 +40,15 @@ uv run autoresearch_unsloth/train_unsloth.py > run.log 2>&1
   LEARNING_RATE, BATCH_SIZE, GRAD_ACCUM_STEPS, WARMUP_STEPS, WEIGHT_DECAY, LR_SCHEDULER, USE_RSLORA,
   TARGET_MODULES.
 - Set `MODEL_NAME` to any entry in `CANDIDATE_MODELS`. Treat the base model as one more axis of the
-  search space — switch models when the current one appears to have plateaued.
+  search space. `CANDIDATE_MODELS` is ordered by descending priority — exhaust improvements on the
+  highest-priority model before switching to a lower one. Models not yet cached are downloaded
+  automatically at run start if disk and VRAM allow.
 
 **What you CANNOT do:**
 
 - Modify `autoresearch_unsloth/prepare_unsloth.py`. It is read-only.
-- Set `MODEL_NAME` to a value not listed in `CANDIDATE_MODELS`. Every candidate must already be cached
-  on disk (verified in step 4 of Setup). Do not attempt to download models yourself.
+- Set `MODEL_NAME` to a value not listed in `CANDIDATE_MODELS`.
+- Attempt to download models yourself — `ensure_model()` handles this automatically.
 - Change the fixed constants in `train_unsloth.py`: MAX_SEQ_LEN, EVAL_STEPS, MAX_STEPS, DATASET_DIR,
   ALPACA_PROMPT.
 - Install new packages or add dependencies.

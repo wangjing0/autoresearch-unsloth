@@ -5,24 +5,28 @@ Usage: uv run autoresearch_unsloth/train_unsloth.py
 
 import math
 import os
+import shutil
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from prepare_unsloth import DEFAULT_MODEL_NAME, DATASET_DIR, model_dir
+from prepare_unsloth import CACHE_DIR, DATASET_DIR, model_dir
 
 import torch
 from datasets import load_from_disk
+from huggingface_hub import snapshot_download
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel, is_bfloat16_supported
 
-# Candidate base models — run prepare_unsloth.py for each before training.
-# The agent selects one entry from this list and assigns it to MODEL_NAME.
+# Candidate base models listed in descending priority order.
+# The agent should prefer higher-priority models (earlier in the list) and only
+# move to a lower-priority one if the current model has plateaued or cannot be
+# loaded due to resource constraints.
+# Models are downloaded on-demand by ensure_model() — no pre-download required.
 CANDIDATE_MODELS = [
-    "unsloth/Qwen2.5-0.5B-Instruct",   
-    "unsloth/Llama-3.2-1B-Instruct", 
+    "unsloth/Qwen2.5-0.5B-Instruct",   # priority 1 — fastest, lowest VRAM
+    "unsloth/Llama-3.2-1B-Instruct",   # priority 2 — different architecture
 ]
-
 # ---------------------------------------------------------------------------
 # Hyperparameters (agent edits this section directly, no CLI flags needed)
 # ---------------------------------------------------------------------------
@@ -47,8 +51,41 @@ TARGET_MODULES   = [        # attention + MLP projection layers
 # ---------------------------------------------------------------------------
 # Fixed — do not modify
 # ---------------------------------------------------------------------------
+# Resource floors for on-demand model download and loading.
+_MIN_FREE_DISK_GB = 10.0   # conservative ceiling covering the largest candidate
+_MIN_FREE_VRAM_GB = 5.0   # minimum to run LoRA training on these small models
 
-MODEL_DIR   = model_dir(MODEL_NAME)
+def ensure_model(model_name: str) -> str:
+    """Return the local model directory, downloading on-demand if resources allow."""
+    dest = model_dir(model_name)
+    if os.path.exists(os.path.join(dest, "config.json")):
+        return dest
+
+    check_path = CACHE_DIR if os.path.exists(CACHE_DIR) else os.path.expanduser("~")
+    free_disk_gb = shutil.disk_usage(check_path).free / 1024 ** 3
+    if free_disk_gb < _MIN_FREE_DISK_GB:
+        raise RuntimeError(
+            f"Cannot download {model_name}: {free_disk_gb:.1f} GB disk free, "
+            f"need >= {_MIN_FREE_DISK_GB} GB"
+        )
+
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        free_vram_gb = (props.total_memory - torch.cuda.memory_allocated()) / 1024 ** 3
+        if free_vram_gb < _MIN_FREE_VRAM_GB:
+            raise RuntimeError(
+                f"Cannot load {model_name}: {free_vram_gb:.1f} GB VRAM free, "
+                f"need >= {_MIN_FREE_VRAM_GB} GB"
+            )
+
+    print(f"Model {model_name} not cached — downloading ({free_disk_gb:.1f} GB disk free) ...")
+    os.makedirs(dest, exist_ok=True)
+    token = os.environ.get("HF_TOKEN")
+    snapshot_download(repo_id=model_name, local_dir=dest, token=token)
+    print(f"Model: saved to {dest}")
+    return dest
+
+MODEL_DIR   = ensure_model(MODEL_NAME)
 # DATASET_DIR imported from prepare_unsloth
 MAX_SEQ_LEN = 1024
 EVAL_STEPS  = 50

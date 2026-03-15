@@ -25,19 +25,15 @@ checks if `eval_loss` improved, and repeats.
 
 ```bash
 uv sync --extra unsloth
-uv run autoresearch_unsloth/prepare_unsloth.py          # one-time: download model + dataset (~5 min)
-uv run autoresearch_unsloth/train_unsloth.py            # verify setup (~2-3 min)
+uv run autoresearch_unsloth/prepare_unsloth.py   # one-time: download dataset (~1 min)
+uv run autoresearch_unsloth/train_unsloth.py     # verify setup; downloads model on first run (~5 min)
 ```
 
 **Requirements:** Single NVIDIA GPU, Python 3.10+, [uv](https://docs.astral.sh/uv/).
 
-Pass any HuggingFace model to the prepare script:
-
-```bash
-uv run autoresearch_unsloth/prepare_unsloth.py --model unsloth/Llama-3.2-1B-Instruct
-```
-
-After downloading, update `MODEL_NAME` in `train_unsloth.py`. Models are cached under
+Base models are downloaded automatically on first use by `train_unsloth.py`, provided
+enough disk space and VRAM are available. The download respects the `HF_TOKEN` environment variable for gated models.
+Models are cached under
 `~/.cache/autoresearch_unsloth/models/<model-slug>/`.
 
 ## Running the agent
