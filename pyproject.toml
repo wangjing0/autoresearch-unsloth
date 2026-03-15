@@ -16,6 +16,18 @@ dependencies = [
     "torch==2.9.1",
 ]
 
+[project.optional-dependencies]
+unsloth = [
+    "unsloth",
+    "trl>=0.16.0",
+    "datasets>=3.0.0",
+    "peft>=0.14.0",
+    "transformers>=4.51.0",
+    "accelerate>=1.0.0",
+    "huggingface_hub>=0.27.0",
+    "bitsandbytes>=0.45.0",
+]
+
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cu128" },
