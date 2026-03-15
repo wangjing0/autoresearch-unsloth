@@ -3,9 +3,9 @@
 Autonomous LLM research loops — give an AI agent a training setup and let it experiment overnight.
 This repo contains two independent modules, each a self-contained autonomous search loop.
 
-## autoresearch (pretraining architecture search)
+## autoresearch (Karpathy's original autoresearch framework)
 
-The original: an agent edits `train.py` to modify GPT architecture and hyperparameters, trains
+An agent edits `train.py` to modify GPT architecture and hyperparameters, trains
 for a fixed 5-minute budget, checks if `val_bpb` improved, and repeats. See
 [`autoresearch/README.md`](autoresearch/README.md) for full details.
 
