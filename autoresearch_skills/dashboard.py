@@ -5,8 +5,8 @@ Autoresearch Dashboard — Live visualization of diagram prompt optimization.
 Reads results.jsonl and serves a live-updating dashboard at http://localhost:8501.
 
 Usage:
-    python3 dashboard.py
-    python3 dashboard.py --port 8501
+    uv run python autoresearch_skills/dashboard.py
+    uv run python autoresearch_skills/dashboard.py --port 8501
 """
 
 import json

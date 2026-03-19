@@ -10,13 +10,15 @@ import sys
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import tempfile
-import shutil
 
 import pytest
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(SKILLS_DIR))
+
+# Ensure the package is importable
+sys.path.insert(0, str(SKILLS_DIR.parent))
+
+MOD_PREFIX = "autoresearch_skills"
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +76,8 @@ def test_dashboard_is_self_contained():
 # prepare.py: constants
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-def _patch_dotenv():
-    with patch.dict(os.environ, {}, clear=False):
-        yield
-
-
 def test_constants():
-    from prepare import BATCH_SIZE, CYCLE_SECONDS, MAX_GEN_WORKERS, MAX_EVAL_WORKERS, TOPICS
+    from autoresearch_skills.prepare import BATCH_SIZE, CYCLE_SECONDS, MAX_GEN_WORKERS, MAX_EVAL_WORKERS, TOPICS
     assert BATCH_SIZE == 10
     assert CYCLE_SECONDS == 120
     assert MAX_GEN_WORKERS >= 1
@@ -90,14 +86,14 @@ def test_constants():
 
 
 def test_models():
-    from prepare import GEN_MODEL, EVAL_MODEL, MUTATE_MODEL
+    from autoresearch_skills.prepare import GEN_MODEL, EVAL_MODEL, MUTATE_MODEL
     assert "gemini" in GEN_MODEL
     assert "claude" in EVAL_MODEL
     assert "claude" in MUTATE_MODEL
 
 
 def test_eval_prompt_mentions_all_criteria():
-    from prepare import EVAL_PROMPT
+    from autoresearch_skills.prepare import EVAL_PROMPT
     for keyword in ["LEGIBLE_AND_GRAMMATICAL", "PASTEL_COLORS", "LINEAR_LAYOUT", "NO_NUMBERS"]:
         assert keyword in EVAL_PROMPT
 
@@ -107,7 +103,7 @@ def test_eval_prompt_mentions_all_criteria():
 # ---------------------------------------------------------------------------
 
 def test_score_batch_all_pass():
-    from prepare import score_batch
+    from autoresearch_skills.prepare import score_batch
     results = [
         {"legible_and_grammatical": True, "pastel_colors": True, "linear_layout": True, "no_numbers": True}
         for _ in range(10)
@@ -121,7 +117,7 @@ def test_score_batch_all_pass():
 
 
 def test_score_batch_all_fail():
-    from prepare import score_batch
+    from autoresearch_skills.prepare import score_batch
     results = [
         {"legible_and_grammatical": False, "pastel_colors": False, "linear_layout": False, "no_numbers": False}
         for _ in range(10)
@@ -131,7 +127,7 @@ def test_score_batch_all_fail():
 
 
 def test_score_batch_mixed():
-    from prepare import score_batch
+    from autoresearch_skills.prepare import score_batch
     results = [
         {"legible_and_grammatical": True, "pastel_colors": False, "linear_layout": True, "no_numbers": False},
         {"legible_and_grammatical": False, "pastel_colors": True, "linear_layout": False, "no_numbers": True},
@@ -145,13 +141,13 @@ def test_score_batch_mixed():
 
 
 def test_score_batch_empty():
-    from prepare import score_batch
+    from autoresearch_skills.prepare import score_batch
     scores = score_batch([])
     assert scores["total"] == 0
 
 
 def test_score_batch_missing_keys():
-    from prepare import score_batch
+    from autoresearch_skills.prepare import score_batch
     results = [{"legible_and_grammatical": True}]
     scores = score_batch(results)
     assert scores["legible"] == 1
@@ -165,20 +161,20 @@ def test_score_batch_missing_keys():
 
 @pytest.fixture
 def tmp_data_dir(tmp_path):
-    with patch("prepare.STATE_FILE", tmp_path / "state.json"), \
-         patch("prepare.PROMPT_FILE", tmp_path / "prompt.txt"), \
-         patch("prepare.BEST_PROMPT_FILE", tmp_path / "best_prompt.txt"):
+    with patch(f"{MOD_PREFIX}.prepare.STATE_FILE", tmp_path / "state.json"), \
+         patch(f"{MOD_PREFIX}.prepare.PROMPT_FILE", tmp_path / "prompt.txt"), \
+         patch(f"{MOD_PREFIX}.prepare.BEST_PROMPT_FILE", tmp_path / "best_prompt.txt"):
         yield tmp_path
 
 
 def test_load_state_default(tmp_data_dir):
-    from prepare import load_state
+    from autoresearch_skills.prepare import load_state
     state = load_state()
     assert state == {"best_score": -1, "run_number": 0}
 
 
 def test_save_load_state_roundtrip(tmp_data_dir):
-    from prepare import save_state, load_state
+    from autoresearch_skills.prepare import save_state, load_state
     save_state({"best_score": 32, "run_number": 5})
     state = load_state()
     assert state["best_score"] == 32
@@ -186,13 +182,13 @@ def test_save_load_state_roundtrip(tmp_data_dir):
 
 
 def test_save_load_prompt_roundtrip(tmp_data_dir):
-    from prepare import save_prompt, load_prompt
+    from autoresearch_skills.prepare import save_prompt, load_prompt
     save_prompt("test prompt content")
     assert load_prompt() == "test prompt content"
 
 
 def test_load_prompt_strips_whitespace(tmp_data_dir):
-    from prepare import save_prompt, load_prompt, PROMPT_FILE
+    from autoresearch_skills.prepare import load_prompt, PROMPT_FILE
     PROMPT_FILE.write_text("  prompt with spaces  \n\n")
     assert load_prompt() == "prompt with spaces"
 
@@ -202,7 +198,7 @@ def test_load_prompt_strips_whitespace(tmp_data_dir):
 # ---------------------------------------------------------------------------
 
 def test_evaluate_one_success(tmp_path):
-    from prepare import evaluate_one
+    from autoresearch_skills.prepare import evaluate_one
 
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -228,7 +224,7 @@ def test_evaluate_one_success(tmp_path):
 
 
 def test_evaluate_one_markdown_fenced(tmp_path):
-    from prepare import evaluate_one
+    from autoresearch_skills.prepare import evaluate_one
 
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -247,7 +243,7 @@ def test_evaluate_one_markdown_fenced(tmp_path):
 
 
 def test_evaluate_one_api_error(tmp_path):
-    from prepare import evaluate_one
+    from autoresearch_skills.prepare import evaluate_one
 
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -264,7 +260,7 @@ def test_evaluate_one_api_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_mutate_prompt():
-    from train import mutate_prompt
+    from autoresearch_skills.train import mutate_prompt
 
     mock_response = MagicMock()
     mock_response.content = [MagicMock()]
@@ -289,7 +285,7 @@ def test_mutate_prompt():
 
 
 def test_mutate_prompt_deduplicates_failures():
-    from train import mutate_prompt
+    from autoresearch_skills.train import mutate_prompt
 
     mock_response = MagicMock()
     mock_response.content = [MagicMock()]
@@ -313,7 +309,7 @@ def test_mutate_prompt_deduplicates_failures():
 # ---------------------------------------------------------------------------
 
 def test_mutation_template_format_fields():
-    from train import MUTATION_TEMPLATE
+    from autoresearch_skills.train import MUTATION_TEMPLATE
     required_fields = ["current_prompt", "score", "leg_rate", "col_rate", "lin_rate", "num_rate", "best_score", "failures"]
     for field in required_fields:
         assert f"{{{field}}}" in MUTATION_TEMPLATE, f"MUTATION_TEMPLATE missing placeholder '{field}'"

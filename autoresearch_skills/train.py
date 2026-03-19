@@ -7,10 +7,12 @@ and the main optimization loop. The fixed evaluation harness lives in
 prepare.py (do not modify).
 
 Usage:
-    python3 train.py              # Continuous loop
-    python3 train.py --once       # Single cycle
-    python3 train.py --cycles 5   # Run N cycles
+    uv run python autoresearch_skills/train.py              # Continuous loop
+    uv run python autoresearch_skills/train.py --once       # Single cycle
+    uv run python autoresearch_skills/train.py --cycles 5   # Run N cycles
 """
+
+from __future__ import annotations
 
 import argparse
 import json

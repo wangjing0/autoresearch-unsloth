@@ -8,6 +8,8 @@ Provides: constants, file paths, topics, eval prompt, evaluate_one(),
 state helpers, and score_batch().
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import os
