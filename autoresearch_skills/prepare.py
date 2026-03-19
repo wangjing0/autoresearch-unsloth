@@ -77,6 +77,7 @@ TOPICS = [
 ]
 
 # ─── Eval Prompt (DO NOT CHANGE — this is the fixed metric) ─────────────────
+CRITERIA = ["legible", "pastel", "linear", "no_numbers"]
 
 EVAL_PROMPT = """You are evaluating a diagram image against 4 strict criteria. Examine the image carefully.
 

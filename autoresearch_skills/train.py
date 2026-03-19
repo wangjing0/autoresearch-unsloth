@@ -12,6 +12,7 @@ Usage:
     uv run python autoresearch_skills/train.py              # Continuous loop
     uv run python autoresearch_skills/train.py --once       # Single cycle
     uv run python autoresearch_skills/train.py --cycles 5   # Run N cycles
+    uv run python autoresearch_skills/train.py --reset      # Reset state
 """
 
 from __future__ import annotations
@@ -32,12 +33,11 @@ from autoresearch_skills.prepare import (
     GEN_MODEL, EVAL_MODEL, MUTATE_MODEL,
     BASE_DIR, BEST_PROMPT_FILE, RESULTS_FILE, DIAGRAMS_DIR,
     BATCH_SIZE, CYCLE_SECONDS, MAX_GEN_WORKERS, MAX_EVAL_WORKERS,
-    TOPICS,
+    TOPICS, CRITERIA,
     evaluate_one, score_batch,
     load_state, save_state, load_prompt, save_prompt,
 )
 
-CRITERIA = ["legible", "pastel", "linear", "no_numbers"]
 FRONTIER_FILE = BASE_DIR / "frontier.jsonl"
 ADVERSARIAL_TOPIC_COUNT = 3
 
@@ -223,6 +223,7 @@ use larger bolder text, or rely more on icons than words.""",
 # ─── Plateau Detection ───────────────────────────────────────────────────────
 
 PLATEAU_WINDOW = 3
+EARLY_STOP_WINDOW = 3
 
 
 def detect_plateau(best_score: int, window: int = PLATEAU_WINDOW) -> bool:
@@ -517,7 +518,21 @@ def main():
     parser = argparse.ArgumentParser(description="Diagram autoresearch loop")
     parser.add_argument("--once", action="store_true", help="Run a single cycle")
     parser.add_argument("--cycles", type=int, default=0, help="Run N cycles (0=infinite)")
+    parser.add_argument("--reset", action="store_true", help="Reset state, results, frontier, and best_prompt")
     args = parser.parse_args()
+
+    if args.reset:
+        import shutil
+        RESULTS_FILE.write_text("")
+        save_state({"best_score": -1, "run_number": 0})
+        FRONTIER_FILE.unlink(missing_ok=True)
+        BEST_PROMPT_FILE.unlink(missing_ok=True)
+        diagrams = DIAGRAMS_DIR
+        if diagrams.exists():
+            shutil.rmtree(diagrams)
+            diagrams.mkdir(parents=True)
+        print("Reset: cleared results, state, frontier, best_prompt, and diagrams.")
+        return
 
     if not GEMINI_KEY:
         print("ERROR: GOOGLE_API_KEY not set", file=sys.stderr)
@@ -562,6 +577,10 @@ def main():
         i += 1
 
         print(f"\n  Cycle took {elapsed:.0f}s")
+
+        if detect_plateau(state["best_score"], window=EARLY_STOP_WINDOW):
+            print(f"\n  Early stopping: no improvement in {EARLY_STOP_WINDOW} consecutive runs.")
+            break
 
     print(f"\nDone. Best score: {state['best_score']}/40")
     if BEST_PROMPT_FILE.exists():

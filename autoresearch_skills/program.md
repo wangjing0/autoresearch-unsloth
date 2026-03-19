@@ -1,7 +1,8 @@
 # autoresearch-skills
 
 Autonomous diagram prompt optimization using Pareto frontier search. The agent iterates
-overnight to find the best generation prompts across 4 evaluation criteria.
+to find the best generation prompts across 4 evaluation criteria, with early stopping
+when progress stalls.
 
 ## Setup
 
@@ -13,11 +14,12 @@ To set up a new experiment, work with the user to:
 3. **Read the in-scope files**:
    - `autoresearch_skills/prepare.py` -- fixed constants, eval criteria, eval function, topics, state helpers. Do not modify.
    - `autoresearch_skills/train.py` -- the file you modify. Pareto frontier logic, mutation templates,
-     adversarial topic generation, optimization hyperparameters, and the main loop.
+     adversarial topic generation, optimization hyperparameters, early stopping, and the main loop.
    - `autoresearch_skills/program.md` -- this file. Read it fully before starting.
 4. **Verify environment**: Check that `.env` contains `GOOGLE_API_KEY` and `ANTHROPIC_API_KEY`.
    If not, tell the human to set them up.
 5. **Verify data dir**: Check that `autoresearch_skills/data/prompt.txt` exists with a seed prompt.
+   `data/initial_prompt.txt` stores the original seed for dashboard comparison.
    If starting fresh, the human should provide one.
 6. **Initialize**: Confirm setup looks good.
 
@@ -36,7 +38,8 @@ uv run python autoresearch_skills/train.py > run.log 2>&1
 **What you CAN do:**
 
 - Modify `autoresearch_skills/train.py` -- this is the only file you edit. All Pareto frontier parameters,
-  mutation templates, adversarial topic generation, plateau detection, and cycle structure are fair game.
+  mutation templates, adversarial topic generation, plateau detection, early stopping, and cycle structure
+  are fair game.
 
 **What you CANNOT do:**
 
@@ -54,6 +57,7 @@ uv run python autoresearch_skills/train.py > run.log 2>&1
 | Parameter                 | Location in train.py        | Description                                      |
 |---------------------------|-----------------------------|--------------------------------------------------|
 | PLATEAU_WINDOW            | optimization config         | Runs without improvement before switching to EXPLORE mode |
+| EARLY_STOP_WINDOW         | optimization config         | Consecutive runs without improvement before stopping the loop |
 | ADVERSARIAL_TOPIC_COUNT   | optimization config         | Number of LLM-generated stress-test topics per batch |
 | REFINE_TEMPLATE           | mutation templates          | Prompt given to Claude for incremental mutations  |
 | EXPLORE_TEMPLATE          | mutation templates          | Prompt given to Claude for radical restructuring  |
@@ -93,6 +97,10 @@ triggered after PLATEAU_WINDOW consecutive cycles without improvement).
 **Bottleneck focus**: When one criterion is clearly the weakest (others at 9+), mutations focus
 exclusively on strategies for that dimension.
 
+**Early stopping**: The loop automatically stops after EARLY_STOP_WINDOW consecutive runs
+without improvement to the best score. This prevents wasting API credits when the system
+has converged.
+
 ## Output format
 
 Each cycle prints:
@@ -115,8 +123,21 @@ RUN 7 | 15:33:08 | Best: 38/40 | Mode: EXPLORE | Weakest: legible
 Extract key metrics:
 
 ```
-grep "SCORE:\|FRONTIER:\|Mode:" run.log
+grep "SCORE:\|FRONTIER:\|Mode:\|Early stopping" run.log
 ```
+
+## Dashboard
+
+Start the live dashboard to monitor progress:
+
+```
+uv run python autoresearch_skills/dashboard.py --port 8501
+```
+
+The dashboard shows: best score, baseline, improvement percentage, frontier size, current
+weakest criterion, mutation mode (REFINE/EXPLORE), score-over-time chart with mode-colored
+dots, Pareto frontier member cards with per-criterion breakdowns, run history table with
+mode/weakest/frontier columns, and initial vs best prompt comparison. Auto-refreshes every 15s.
 
 ## The experiment loop
 
@@ -127,7 +148,7 @@ LOOP FOREVER:
 1. Review the current state: `data/state.json`, `data/frontier.jsonl`, recent entries in `data/results.jsonl`.
 2. Formulate a hypothesis: pick ONE aspect of `train.py` to change. Consider: mutation template
    wording, parent selection strategy, adversarial topic design, plateau detection threshold,
-   frontier management, bottleneck focus instructions.
+   early stopping window, frontier management, bottleneck focus instructions.
 3. Edit `autoresearch_skills/train.py`.
 4. `git commit`
 5. Run: `uv run python autoresearch_skills/train.py --once > run.log 2>&1`
@@ -136,6 +157,10 @@ LOOP FOREVER:
 8. If the score improved or the frontier grew meaningfully, keep the commit and advance.
 9. If no improvement, `git reset --soft HEAD~1` to discard.
 
+**Early stopping**: When running multi-cycle (`--cycles N` or continuous), the loop automatically
+stops after EARLY_STOP_WINDOW (default 3) consecutive runs without improvement. The agent
+should interpret this as a signal to change strategy in `train.py` before restarting.
+
 **Timeout**: Each cycle typically finishes in ~2 minutes. If a run exceeds 5 minutes, kill it
 and treat it as a crash.
 
@@ -143,10 +168,11 @@ and treat it as a crash.
 broken, log it and move on.
 
 **NEVER STOP**: Once the loop has begun, do NOT pause to ask the human whether to continue. You are
-autonomous. If you run out of obvious ideas, re-read the eval criteria for new angles, examine
-which frontier prompts score highest on the weakest criterion and study their structure, try
-radically different mutation templates, or experiment with adversarial topic strategies. The loop
-runs until the human interrupts you.
+autonomous. If early stopping triggers, change your approach in `train.py` and restart. If you
+run out of obvious ideas, re-read the eval criteria for new angles, examine which frontier prompts
+score highest on the weakest criterion and study their structure, try radically different mutation
+templates, or experiment with adversarial topic strategies. The loop runs until the human
+interrupts you.
 
 ## Eval Criteria (fixed in prepare.py)
 
@@ -177,8 +203,9 @@ autoresearch_skills/
   data/
     prompt.txt          # Current prompt being optimized
     best_prompt.txt     # Best prompt found so far (highest total score)
+    initial_prompt.txt  # Original seed prompt (for dashboard comparison)
     state.json          # Loop state (run number, best score)
-    results.jsonl       # Append-only experiment log
+    results.jsonl       # Append-only experiment log (per-run scores, mode, weakest, frontier size)
     frontier.jsonl      # Pareto frontier of non-dominated prompts
     diagrams/
       run_001/          # 10 diagrams per run
