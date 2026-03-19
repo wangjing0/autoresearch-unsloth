@@ -561,13 +561,7 @@ def main():
         elapsed = time.time() - start
         i += 1
 
-        if i < max_cycles:
-            wait = max(0, CYCLE_SECONDS - elapsed)
-            if wait > 0:
-                print(f"\n  Waiting {wait:.0f}s until next cycle...")
-                time.sleep(wait)
-            else:
-                print(f"\n  Cycle took {elapsed:.0f}s (>{CYCLE_SECONDS}s budget)")
+        print(f"\n  Cycle took {elapsed:.0f}s")
 
     print(f"\nDone. Best score: {state['best_score']}/40")
     if BEST_PROMPT_FILE.exists():
