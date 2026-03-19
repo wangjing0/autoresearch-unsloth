@@ -21,6 +21,7 @@ RESULTS_FILE = BASE_DIR / "results.jsonl"
 STATE_FILE = BASE_DIR / "state.json"
 PROMPT_FILE = BASE_DIR / "prompt.txt"
 BEST_PROMPT_FILE = BASE_DIR / "best_prompt.txt"
+INITIAL_PROMPT_FILE = BASE_DIR / "initial_prompt.txt"
 DIAGRAMS_DIR = BASE_DIR / "diagrams"
 
 HTML = r"""<!DOCTYPE html>
@@ -28,7 +29,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Diagram Autoresearch</title>
+<title>Skills Autoresearch</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -63,6 +64,7 @@ HTML = r"""<!DOCTYPE html>
   .status-keep { color: #27ae60; font-weight: 600; }
   .status-discard { color: #8a8580; }
 
+  .prompts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 32px; }
   .prompt-container { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .prompt-container h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #8a8580; margin-bottom: 12px; }
   .prompt-text { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.6; color: #4a4540; white-space: pre-wrap; word-break: break-word; background: #faf9f7; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto; }
@@ -70,6 +72,7 @@ HTML = r"""<!DOCTYPE html>
   @media (max-width: 768px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
     .criteria-charts { grid-template-columns: 1fr; }
+    .prompts-grid { grid-template-columns: 1fr; }
     body { padding: 16px; }
   }
 </style>
@@ -79,7 +82,7 @@ HTML = r"""<!DOCTYPE html>
 <div class="header">
   <div>
     <div style="display:flex;align-items:center;gap:12px;">
-      <h1>Autoresearch</h1>
+      <h1>Skills Autoresearch</h1>
       <span class="badge" id="live-badge">LIVE</span>
     </div>
     <div class="subtitle" id="subtitle">Diagram prompt optimization — refreshes every 15s</div>
@@ -138,9 +141,15 @@ HTML = r"""<!DOCTYPE html>
   </table>
 </div>
 
-<div class="prompt-container">
-  <h3>Current Best Prompt</h3>
-  <div class="prompt-text" id="best-prompt">Loading...</div>
+<div class="prompts-grid">
+  <div class="prompt-container">
+    <h3>Initial Prompt</h3>
+    <div class="prompt-text" id="initial-prompt">Loading...</div>
+  </div>
+  <div class="prompt-container">
+    <h3>Current Best Prompt</h3>
+    <div class="prompt-text" id="best-prompt">Loading...</div>
+  </div>
 </div>
 
 <script>
@@ -291,7 +300,12 @@ async function refresh() {
   }).reverse();
   tbody.innerHTML = rows.join('');
 
-  // Best prompt
+  // Prompts
+  if (data.initial_prompt) {
+    document.getElementById('initial-prompt').textContent = data.initial_prompt;
+  } else {
+    document.getElementById('initial-prompt').textContent = '(not saved yet — starts on first run)';
+  }
   if (data.best_prompt) {
     document.getElementById('best-prompt').textContent = data.best_prompt;
   }
@@ -335,11 +349,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                         except json.JSONDecodeError:
                             pass
 
+            initial_prompt = ""
+            if INITIAL_PROMPT_FILE.exists():
+                initial_prompt = INITIAL_PROMPT_FILE.read_text().strip()
+
             best_prompt = ""
             if BEST_PROMPT_FILE.exists():
                 best_prompt = BEST_PROMPT_FILE.read_text().strip()
 
-            data = {"runs": runs, "best_prompt": best_prompt}
+            data = {"runs": runs, "initial_prompt": initial_prompt, "best_prompt": best_prompt}
             self.wfile.write(json.dumps(data).encode())
 
         else:
@@ -353,7 +371,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Autoresearch Dashboard")
+    parser = argparse.ArgumentParser(description="Skills Autoresearch Dashboard")
     parser.add_argument("--port", type=int, default=8501)
     args = parser.parse_args()
 

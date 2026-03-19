@@ -1,78 +1,152 @@
-# autoresearch-diagrams
+# autoresearch-skills
 
-This is an experiment to have the LLM optimize its own diagram generation prompts.
+Autonomous diagram prompt optimization using Pareto frontier search. The agent iterates
+overnight to find the best generation prompts across 4 evaluation criteria.
 
 ## Setup
 
 To set up a new experiment, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar19`). The branch `autoresearch/<tag>` must not already exist -- this is a fresh run.
-2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
-3. **Read the in-scope files**: The repo is small. Read these files for full context:
-   - `prepare.py` -- fixed constants, eval criteria, eval function, topics, state helpers. Do not modify.
-   - `train.py` -- the file you modify. Generation, mutation template, main optimization loop.
-   - `dashboard.py` -- live web dashboard. Read-only context, not part of the optimization.
-4. **Verify environment**: Check that `.env` contains `NANO_BANANA_API_KEY` and `ANTHROPIC_API_KEY`. If not, tell the human to set them up.
-5. **Verify data dir**: Check that `data/prompt.txt` exists with a seed prompt. If starting fresh, the human should provide one.
-6. **Confirm and go**: Confirm setup looks good.
+1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar19`). The branch
+   `autoresearch-skills/<tag>` must not already exist -- this is a fresh run.
+2. **Create the branch**: `git checkout -b autoresearch-skills/<tag>` from current master.
+3. **Read the in-scope files**:
+   - `autoresearch_skills/prepare.py` -- fixed constants, eval criteria, eval function, topics, state helpers. Do not modify.
+   - `autoresearch_skills/train.py` -- the file you modify. Pareto frontier logic, mutation templates,
+     adversarial topic generation, optimization hyperparameters, and the main loop.
+   - `autoresearch_skills/program.md` -- this file. Read it fully before starting.
+4. **Verify environment**: Check that `.env` contains `GOOGLE_API_KEY` and `ANTHROPIC_API_KEY`.
+   If not, tell the human to set them up.
+5. **Verify data dir**: Check that `autoresearch_skills/data/prompt.txt` exists with a seed prompt.
+   If starting fresh, the human should provide one.
+6. **Initialize**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment cycle takes ~2 minutes. The script generates 10 diagrams with the current prompt (Gemini image gen), evaluates each against 4 criteria via Claude vision, keeps the prompt if it beats the best score, then mutates it for the next cycle. You launch it as: `python3 train.py`
+Each experiment cycle takes ~2 minutes. The script generates 10 diagrams with the current
+prompt (Gemini image gen), evaluates each against 4 criteria via Claude vision, updates the
+Pareto frontier, then mutates the prompt for the next cycle. You launch it as:
+
+```
+uv run python autoresearch_skills/train.py > run.log 2>&1
+```
 
 **What you CAN do:**
-- Modify `train.py` -- this is the only file you edit. Everything is fair game: the mutation template, generation strategy, mutation logic, cycle structure, batch handling, etc.
+
+- Modify `autoresearch_skills/train.py` -- this is the only file you edit. All Pareto frontier parameters,
+  mutation templates, adversarial topic generation, plateau detection, and cycle structure are fair game.
 
 **What you CANNOT do:**
-- Modify `prepare.py`. It is read-only. It contains the fixed evaluation function (`evaluate_one`), scoring (`score_batch`), eval criteria, topics, and all constants.
+
+- Modify `autoresearch_skills/prepare.py`. It is read-only. It contains the fixed evaluation function
+  (`evaluate_one`), scoring (`score_batch`), eval criteria (`EVAL_PROMPT`), base topics, and all constants.
 - Install new packages or add dependencies.
-- Modify the evaluation criteria. The `EVAL_PROMPT` and `evaluate_one` function in `prepare.py` are the ground truth metric.
+- Modify the evaluation criteria. The `EVAL_PROMPT` and `evaluate_one` function in `prepare.py`
+  are the ground truth metric.
 
-**The goal is simple: get the highest score out of 40.** Each batch of 10 diagrams is scored on 4 binary criteria (legible text, pastel colors, linear layout, no numbers), for a maximum of 40 points. Everything in `train.py` is fair game: change the mutation strategy, the generation prompt structure, how failures are analyzed, how the prompt evolves.
+**The goal is simple: get the highest score out of 40.** Each batch of 10 diagrams is scored on
+4 binary criteria (legible text, pastel colors, linear layout, no numbers), for a maximum of 40.
 
-**Cost** is a soft constraint. Each cycle costs ~$0.40-0.60. Radical changes that dramatically increase API calls should be justified by meaningful score improvements.
+**The search space** -- parameters to explore in `train.py`:
 
-**Simplicity criterion**: All else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome. When evaluating whether to keep a change, weigh the complexity cost against the improvement magnitude.
+| Parameter                 | Location in train.py        | Description                                      |
+|---------------------------|-----------------------------|--------------------------------------------------|
+| PLATEAU_WINDOW            | optimization config         | Runs without improvement before switching to EXPLORE mode |
+| ADVERSARIAL_TOPIC_COUNT   | optimization config         | Number of LLM-generated stress-test topics per batch |
+| REFINE_TEMPLATE           | mutation templates          | Prompt given to Claude for incremental mutations  |
+| EXPLORE_TEMPLATE          | mutation templates          | Prompt given to Claude for radical restructuring  |
+| BOTTLENECK_FOCUS          | mutation templates          | Per-criterion focused instructions when one criterion dominates |
+| TOPIC_GEN_TEMPLATE        | topic generation            | Prompt for generating adversarial diagram topics  |
+| STRESS_INSTRUCTIONS       | topic generation            | Per-criterion stress-test strategies              |
+| select_parent()           | frontier logic              | How parents are chosen from the Pareto frontier   |
+| find_weakest_criterion()  | frontier logic              | How the weakest dimension is identified           |
 
-**The first run**: Your very first run should always be to establish the baseline -- run `python3 train.py --once` with the existing prompt as-is.
+**Cost** is a soft constraint. Each cycle costs ~$0.50-0.80. Radical changes that dramatically
+increase API calls should be justified by meaningful score improvements.
+
+**Simplicity criterion**: When two configurations produce similar scores, prefer the simpler one.
+A marginal gain that makes the code harder to understand is not worth it.
+
+**The first run**: Always establish the baseline first -- run with the existing prompt and
+default parameters as-is.
+
+## Optimization Architecture
+
+The system uses **Pareto frontier optimization** across 4 criteria instead of greedy
+hill-climbing on a single scalar score.
+
+**Pareto frontier** (`data/frontier.jsonl`): Non-dominated prompts. Prompt A dominates B if A is
+better on at least one criterion and no worse on all others. Maintains diversity -- prompts with
+different trade-offs coexist.
+
+**Parent selection**: Each cycle selects a parent from the frontier, weighted toward prompts strong
+on the overall weakest criterion.
+
+**Adversarial topics**: Claude generates stress-test topics targeting the weakest criterion.
+Mixed with standard topics from `prepare.py` for each batch.
+
+**Two mutation modes**: REFINE (incremental, default) and EXPLORE (radical restructuring,
+triggered after PLATEAU_WINDOW consecutive cycles without improvement).
+
+**Bottleneck focus**: When one criterion is clearly the weakest (others at 9+), mutations focus
+exclusively on strategies for that dimension.
 
 ## Output format
 
-Each cycle prints a summary like this:
+Each cycle prints:
 
 ```
-SCORE: 32/40
-    Legible:    8/10
-    Pastel:     9/10
-    Linear:     7/10
-    No numbers: 8/10
+RUN 7 | 15:33:08 | Best: 38/40 | Mode: EXPLORE | Weakest: legible
+  Frontier size: 3 | Adversarial topics: 3
+
+  SCORE: 36/40
+    Legible:    6/10
+    Pastel:     10/10
+    Linear:     10/10
+    No numbers: 10/10
+
+  FRONTIER: Added (frontier size: 4)
+  Bottleneck: legible
+  Mutating prompt (EXPLORE mode)...
 ```
 
-Results are also logged to `data/results.jsonl` as append-only JSONL entries with per-criterion breakdowns.
+Extract key metrics:
+
+```
+grep "SCORE:\|FRONTIER:\|Mode:" run.log
+```
 
 ## The experiment loop
 
-The experiment runs on a dedicated branch (e.g. `autoresearch/mar19`).
+The experiment runs on a dedicated branch (e.g. `autoresearch-skills/mar19`).
 
 LOOP FOREVER:
 
-1. Look at the current state: best score so far, current prompt, recent results in `data/results.jsonl`.
-2. Form a hypothesis about what change to `train.py` might improve scores (mutation template wording, generation strategy, failure analysis approach, etc).
-3. Edit `train.py` with the change.
-4. git commit.
-5. Run a cycle: `python3 train.py --once > run.log 2>&1`
-6. Read out the results: `grep "SCORE:" run.log` and check `data/state.json` for the best score.
-7. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the stack trace and attempt a fix.
-8. If the score improved, keep the commit and advance.
-9. If the score is equal or worse, git reset back to where you started.
+1. Review the current state: `data/state.json`, `data/frontier.jsonl`, recent entries in `data/results.jsonl`.
+2. Formulate a hypothesis: pick ONE aspect of `train.py` to change. Consider: mutation template
+   wording, parent selection strategy, adversarial topic design, plateau detection threshold,
+   frontier management, bottleneck focus instructions.
+3. Edit `autoresearch_skills/train.py`.
+4. `git commit`
+5. Run: `uv run python autoresearch_skills/train.py --once > run.log 2>&1`
+6. Read results: `grep "SCORE:\|FRONTIER:" run.log` and check `data/state.json`, `data/frontier.jsonl`.
+7. If grep is empty, the run crashed. Run `tail -n 50 run.log` to inspect the error.
+8. If the score improved or the frontier grew meaningfully, keep the commit and advance.
+9. If no improvement, `git reset --soft HEAD~1` to discard.
 
-The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. You're advancing the branch so that you can iterate.
+**Timeout**: Each cycle typically finishes in ~2 minutes. If a run exceeds 5 minutes, kill it
+and treat it as a crash.
 
-**Crashes**: If a run crashes, use your judgment. If it's a typo or missing import, fix and re-run. If the idea is fundamentally broken, discard and move on.
+**Crashes**: Fix obvious issues (typos, missing imports) and re-run. If the idea is fundamentally
+broken, log it and move on.
 
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep or away and expects you to continue working *indefinitely* until manually stopped. You are autonomous. If you run out of ideas, think harder -- re-read the eval criteria for new angles, try different mutation strategies, experiment with prompt structure, try combining previous near-misses. The loop runs until the human interrupts you, period.
+**NEVER STOP**: Once the loop has begun, do NOT pause to ask the human whether to continue. You are
+autonomous. If you run out of obvious ideas, re-read the eval criteria for new angles, examine
+which frontier prompts score highest on the weakest criterion and study their structure, try
+radically different mutation templates, or experiment with adversarial topic strategies. The loop
+runs until the human interrupts you.
 
 ## Eval Criteria (fixed in prepare.py)
 
@@ -87,24 +161,29 @@ Score = sum of passes across 10 diagrams x 4 criteria = max 40.
 
 ## Models
 
-- **Generation**: `gemini-2.5-flash-image` (Gemini native image gen)
-- **Evaluation**: `claude-sonnet-4-6` (vision + structured JSON output)
-- **Mutation**: `claude-sonnet-4-6` (prompt rewriting based on failure analysis)
+- **Generation**: `gemini-2.5-flash-image` (Gemini native image gen, fixed in prepare.py)
+- **Evaluation**: `claude-sonnet-4-6` (vision + structured JSON output, fixed in prepare.py)
+- **Mutation**: `claude-sonnet-4-6` (prompt rewriting + adversarial topic generation, fixed in prepare.py)
 
 ## File Structure
 
 ```
-prepare.py            # Fixed eval harness, constants, topics (do not modify)
-train.py              # Generation, mutation, main loop (agent iterates on this)
-dashboard.py          # Live web dashboard (Chart.js)
-program.md            # This file -- agent instructions
-data/
-  prompt.txt          # Current prompt being optimized
-  best_prompt.txt     # Best prompt found so far
-  state.json          # Loop state (run number, best score)
-  results.jsonl       # Append-only experiment log
-  diagrams/
-    run_001/          # 10 diagrams per run
-    run_002/
-    ...
+autoresearch_skills/
+  prepare.py            # Fixed eval harness, constants, topics (do not modify)
+  train.py              # Pareto frontier optimization (agent iterates on this)
+  dashboard.py          # Live web dashboard (read-only)
+  program.md            # This file -- agent instructions
+  __init__.py           # Package init
+  data/
+    prompt.txt          # Current prompt being optimized
+    best_prompt.txt     # Best prompt found so far (highest total score)
+    state.json          # Loop state (run number, best score)
+    results.jsonl       # Append-only experiment log
+    frontier.jsonl      # Pareto frontier of non-dominated prompts
+    diagrams/
+      run_001/          # 10 diagrams per run
+      run_002/
+      ...
+  tests/
+    test_suite.py       # Test suite
 ```

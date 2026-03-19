@@ -280,7 +280,6 @@ def test_mutate_prompt():
     call_args = mock_client.messages.create.call_args
     prompt_text = call_args.kwargs["messages"][0]["content"]
     assert "current prompt" in prompt_text
-    assert "30" in prompt_text
     assert "dark blue fill" in prompt_text
 
 
@@ -308,11 +307,85 @@ def test_mutate_prompt_deduplicates_failures():
 # train.py: MUTATION_TEMPLATE format fields
 # ---------------------------------------------------------------------------
 
-def test_mutation_template_format_fields():
-    from autoresearch_skills.train import MUTATION_TEMPLATE
-    required_fields = ["current_prompt", "score", "leg_rate", "col_rate", "lin_rate", "num_rate", "best_score", "failures"]
+def test_refine_template_format_fields():
+    from autoresearch_skills.train import REFINE_TEMPLATE
+    required_fields = ["current_prompt", "score", "leg_rate", "col_rate", "lin_rate", "num_rate", "failures", "focus_instructions", "frontier_context"]
     for field in required_fields:
-        assert f"{{{field}}}" in MUTATION_TEMPLATE, f"MUTATION_TEMPLATE missing placeholder '{field}'"
+        assert f"{{{field}}}" in REFINE_TEMPLATE, f"REFINE_TEMPLATE missing placeholder '{field}'"
+
+
+def test_explore_template_format_fields():
+    from autoresearch_skills.train import EXPLORE_TEMPLATE
+    required_fields = ["current_prompt", "leg_rate", "col_rate", "lin_rate", "num_rate", "failures", "frontier_context"]
+    for field in required_fields:
+        assert f"{{{field}}}" in EXPLORE_TEMPLATE, f"EXPLORE_TEMPLATE missing placeholder '{field}'"
+
+
+def test_pareto_dominates():
+    from autoresearch_skills.train import dominates
+    a = {"legible": 10, "pastel": 10, "linear": 10, "no_numbers": 10}
+    b = {"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10}
+    assert dominates(a, b)
+    assert not dominates(b, a)
+    assert not dominates(a, a)
+
+
+def test_pareto_non_dominated():
+    from autoresearch_skills.train import dominates
+    a = {"legible": 10, "pastel": 8, "linear": 10, "no_numbers": 10}
+    b = {"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10}
+    assert not dominates(a, b)
+    assert not dominates(b, a)
+
+
+def test_update_frontier_adds_non_dominated():
+    from autoresearch_skills.train import update_frontier
+    frontier = [{"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "a", "total": 38}]
+    candidate = {"legible": 10, "pastel": 8, "linear": 10, "no_numbers": 10, "prompt": "b", "total": 38}
+    new_frontier, added = update_frontier(frontier, candidate)
+    assert added
+    assert len(new_frontier) == 2
+
+
+def test_update_frontier_rejects_dominated():
+    from autoresearch_skills.train import update_frontier
+    frontier = [{"legible": 10, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "a", "total": 40}]
+    candidate = {"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "b", "total": 38}
+    new_frontier, added = update_frontier(frontier, candidate)
+    assert not added
+    assert len(new_frontier) == 1
+
+
+def test_update_frontier_prunes_dominated():
+    from autoresearch_skills.train import update_frontier
+    frontier = [{"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "a", "total": 38}]
+    candidate = {"legible": 10, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "b", "total": 40}
+    new_frontier, added = update_frontier(frontier, candidate)
+    assert added
+    assert len(new_frontier) == 1
+    assert new_frontier[0]["prompt"] == "b"
+
+
+def test_detect_plateau_no_file(tmp_path):
+    from autoresearch_skills.train import detect_plateau, RESULTS_FILE
+    with patch("autoresearch_skills.train.RESULTS_FILE", tmp_path / "nonexistent.jsonl"):
+        assert not detect_plateau(38, window=3)
+
+
+def test_detect_plateau_true(tmp_path):
+    from autoresearch_skills.train import detect_plateau
+    f = tmp_path / "results.jsonl"
+    f.write_text("\n".join(json.dumps({"score": 35}) for _ in range(3)) + "\n")
+    with patch("autoresearch_skills.train.RESULTS_FILE", f):
+        assert detect_plateau(38, window=3)
+
+
+def test_detect_plateau_false_when_improving(tmp_path):
+    from autoresearch_skills.train import detect_plateau
+    f = tmp_path / "results.jsonl"
+    f.write_text("\n".join(json.dumps({"score": s}) for s in [35, 37, 39]) + "\n")
+    with patch("autoresearch_skills.train.RESULTS_FILE", f):
+        assert not detect_plateau(38, window=3)
 
 
 # ---------------------------------------------------------------------------

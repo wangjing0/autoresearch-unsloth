@@ -25,3 +25,4 @@ results.tsv
 /unsloth
 .DS_Store
 */data/*
+.env

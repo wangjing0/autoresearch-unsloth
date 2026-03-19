@@ -21,7 +21,7 @@ load_dotenv()
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GEMINI_KEY = os.getenv("NANO_BANANA_API_KEY")
+GEMINI_KEY = os.getenv("GOOGLE_API_KEY")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 GEN_MODEL = "gemini-2.5-flash-image"
@@ -31,6 +31,7 @@ MUTATE_MODEL = "claude-sonnet-4-6"
 BASE_DIR = Path(__file__).resolve().parent / "data"
 PROMPT_FILE = BASE_DIR / "prompt.txt"
 BEST_PROMPT_FILE = BASE_DIR / "best_prompt.txt"
+INITIAL_PROMPT_FILE = BASE_DIR / "initial_prompt.txt"
 STATE_FILE = BASE_DIR / "state.json"
 RESULTS_FILE = BASE_DIR / "results.jsonl"
 DIAGRAMS_DIR = BASE_DIR / "diagrams"
