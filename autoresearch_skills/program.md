@@ -1,8 +1,8 @@
 # autoresearch-skills
 
-Autonomous diagram prompt optimization using Pareto frontier search. The agent iterates
-to find the best generation prompts across 4 evaluation criteria, with early stopping
-when progress stalls.
+Autonomous skill prompt optimization using Pareto frontier search. The agent iterates
+to find the best generation prompts across 6 evaluation criteria, switching to exploratory
+mutations when progress stalls.
 
 ## Division of Responsibility
 
@@ -24,10 +24,10 @@ and do not change during a run.
   calls Claude vision and computes scores. The scoring logic is fixed.
 - **Constants** in `prepare.py` -- models (GEN_MODEL, EVAL_MODEL, MUTATE_MODEL), batch size,
   cycle timing, worker counts. These set the operational constraints.
-- **data/prompt.txt** -- the initial seed prompt that tells Gemini how to generate diagrams.
+- **data/prompt.txt** -- the initial seed prompt that tells Gemini how to generate images.
   The human writes the starting point; the agent evolves it from there.
 
-If you want to change what the system optimizes for (different criteria, different diagram
+If you want to change what the system optimizes for (different criteria, different generation
 style, different scoring), you modify `prepare.py` and provide a new seed prompt. Then
 reset and let the agent run again.
 
@@ -106,12 +106,11 @@ uv run python autoresearch_skills/train.py > run.log 2>&1
 | Parameter                 | Location in train.py        | Description                                      |
 |---------------------------|-----------------------------|--------------------------------------------------|
 | PLATEAU_WINDOW            | optimization config         | Runs without improvement before switching to EXPLORE mode |
-| EARLY_STOP_WINDOW         | optimization config         | Consecutive runs without improvement before stopping the loop |
 | ADVERSARIAL_TOPIC_COUNT   | optimization config         | Number of LLM-generated stress-test topics per batch |
 | REFINE_TEMPLATE           | mutation templates          | Prompt given to Claude for incremental mutations  |
 | EXPLORE_TEMPLATE          | mutation templates          | Prompt given to Claude for radical restructuring  |
 | BOTTLENECK_FOCUS          | mutation templates          | Per-criterion focused instructions when one criterion dominates |
-| TOPIC_GEN_TEMPLATE        | topic generation            | Prompt for generating adversarial diagram topics  |
+| TOPIC_GEN_TEMPLATE        | topic generation            | Prompt for generating adversarial topics  |
 | STRESS_INSTRUCTIONS       | topic generation            | Per-criterion stress-test strategies              |
 | select_parent()           | frontier logic              | How parents are chosen from the Pareto frontier   |
 | find_weakest_criterion()  | frontier logic              | How the weakest dimension is identified           |
@@ -146,9 +145,8 @@ triggered after PLATEAU_WINDOW consecutive cycles without improvement).
 **Bottleneck focus**: When one criterion is clearly the weakest (others at 9+), mutations focus
 exclusively on strategies for that dimension.
 
-**Early stopping**: The loop automatically stops after EARLY_STOP_WINDOW consecutive runs
-without improvement to the best score. This prevents wasting API credits when the system
-has converged.
+**Plateau detection**: After PLATEAU_WINDOW consecutive runs without improvement, the system
+switches from REFINE to EXPLORE mode for radical prompt restructuring.
 
 ## Output format
 
@@ -188,30 +186,14 @@ weakest criterion, mutation mode (REFINE/EXPLORE), score-over-time chart with mo
 dots, Pareto frontier member cards with per-criterion breakdowns, run history table with
 mode/weakest/frontier columns, and initial vs best prompt comparison. Auto-refreshes every 15s.
 
-## The experiment loop
 
-The experiment runs on a dedicated branch (e.g. `autoresearch-skills/mar19`).
-
-LOOP FOREVER:
-
-1. Review the current state: `data/state.json`, `data/frontier.jsonl`, recent entries in `data/results.jsonl`.
-2. Formulate a hypothesis: pick ONE aspect of `train.py` to change. Consider: mutation template
-   wording, parent selection strategy, adversarial topic design, plateau detection threshold,
-   early stopping window, frontier management, bottleneck focus instructions.
-3. Edit `autoresearch_skills/train.py`.
-4. `git commit`
-5. Run: `uv run python autoresearch_skills/train.py --once > run.log 2>&1`
-6. Read results: `grep "SCORE:\|FRONTIER:" run.log` and check `data/state.json`, `data/frontier.jsonl`.
-7. If grep is empty, the run crashed. Run `tail -n 50 run.log` to inspect the error.
-8. If the score improved or the frontier grew meaningfully, keep the commit and advance.
-9. If no improvement, `git reset --soft HEAD~1` to discard.
-
-**Early stopping**: When running multi-cycle (`--cycles N` or continuous), the loop automatically
-stops after EARLY_STOP_WINDOW (default 3) consecutive runs without improvement. The agent
-should interpret this as a signal to change strategy in `train.py` before restarting.
+**Plateau detection**: When running multi-cycle (`--cycles N` or continuous), the system
+switches to EXPLORE mode after PLATEAU_WINDOW (default 3) consecutive runs without
+improvement. The agent should interpret persistent plateaus as a signal to change strategy
+in `train.py` before restarting.
 
 **Reset**: To start fresh, run `uv run python autoresearch_skills/train.py --reset`. This clears
-results, state, frontier, best_prompt, and diagrams while preserving the seed prompt.
+results, state, frontier, best_prompt, and output files while preserving the seed prompt.
 
 **Timeout**: Each cycle typically finishes in ~2 minutes. If a run exceeds 5 minutes, kill it
 and treat it as a crash.
@@ -257,17 +239,6 @@ autoresearch_skills/
   dashboard.py          # Live web dashboard (read-only)
   program.md            # This file -- agent instructions
   __init__.py           # Package init
-  data/
-    prompt.txt          # Current prompt being optimized (seed written by human, evolved by agent)
-    best_prompt.txt     # Best prompt found so far (highest total score)
-    initial_prompt.txt  # Original seed prompt (for dashboard comparison)
-    state.json          # Loop state (run number, best score)
-    results.jsonl       # Append-only experiment log (per-run scores, mode, weakest, frontier size)
-    frontier.jsonl      # Pareto frontier of non-dominated prompts
-    diagrams/
-      run_001/          # 10 diagrams per run
-      run_002/
-      ...
   tests/
     test_suite.py       # Test suite
 ```

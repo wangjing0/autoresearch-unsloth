@@ -31,7 +31,7 @@ from pathlib import Path
 from autoresearch_skills.prepare import (
     GEMINI_KEY, ANTHROPIC_KEY,
     GEN_MODEL, EVAL_MODEL, MUTATE_MODEL,
-    BASE_DIR, BEST_PROMPT_FILE, RESULTS_FILE, DIAGRAMS_DIR,
+    BASE_DIR, BEST_PROMPT_FILE, INITIAL_PROMPT_FILE, RESULTS_FILE, DIAGRAMS_DIR,
     BATCH_SIZE, CYCLE_SECONDS, MAX_GEN_WORKERS, MAX_EVAL_WORKERS,
     TOPICS, CRITERIA, MAX_SCORE, PLATEAU_WINDOW,
     evaluate_one, score_batch,
@@ -64,10 +64,18 @@ def dominates(a: dict, b: dict) -> bool:
     return dominated_one
 
 
+def _score_vector(entry: dict) -> tuple:
+    """Extract the score vector as a hashable tuple for dedup."""
+    return tuple(entry.get(c, 0) for c in CRITERIA)
+
+
 def update_frontier(frontier: list[dict], candidate: dict) -> tuple[list[dict], bool]:
-    """Add candidate if non-dominated. Prune any members it dominates."""
+    """Add candidate if non-dominated and not a duplicate. Prune dominated members."""
+    candidate_vec = _score_vector(candidate)
     for member in frontier:
         if dominates(member, candidate):
+            return frontier, False
+        if _score_vector(member) == candidate_vec:
             return frontier, False
     pruned = [m for m in frontier if not dominates(candidate, m)]
     pruned.append(candidate)
@@ -252,20 +260,26 @@ Consistent icon style (all outline, all same stroke width). Ban empty boxes.""",
 # ─── Plateau Detection ───────────────────────────────────────────────────────
 
 
-def detect_plateau(best_score: int, window: int = PLATEAU_WINDOW) -> bool:
-    """True if best score hasn't improved in the last `window` runs."""
+def detect_plateau(best_score: float, window: int = PLATEAU_WINDOW) -> bool:
+    """True if the best score across the last `window` runs equals the all-time best.
+
+    The old check (all recent <= best) was nearly always true since individual
+    run scores rarely exceed the historical best. Instead, we check whether
+    the *maximum* score within the window failed to set a new record -- i.e.,
+    the best hasn't actually improved during the window.
+    """
     if not RESULTS_FILE.exists():
         return False
     lines = RESULTS_FILE.read_text().strip().split("\n")
     if len(lines) < window:
         return False
-    recent = []
+    recent_best = -1.0
     for line in lines[-window:]:
         try:
-            recent.append(json.loads(line)["score"])
+            recent_best = max(recent_best, json.loads(line)["score"])
         except (json.JSONDecodeError, KeyError):
             return False
-    return all(s <= best_score for s in recent)
+    return recent_best <= best_score and best_score > -1
 
 
 # ─── Generation (Gemini) ─────────────────────────────────────────────────────
@@ -379,15 +393,20 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     is_plateau = detect_plateau(state["best_score"])
     mode = "EXPLORE" if is_plateau else "REFINE"
 
-    parent = select_parent(frontier, weakest) if frontier else None
-    if parent and random.random() < 0.5:
-        prompt = parent["prompt"]
-        print(f"  Using frontier parent (strong on {weakest})")
+    if run_num == 1 and INITIAL_PROMPT_FILE.exists():
+        prompt = INITIAL_PROMPT_FILE.read_text().strip()
+        print("  Using initial seed prompt for baseline eval")
     else:
-        prompt = load_prompt()
+        parent = select_parent(frontier, weakest) if frontier else None
+        if parent and random.random() < 0.5:
+            prompt = parent["prompt"]
+            print(f"  Using frontier parent (strong on {weakest})")
+        else:
+            prompt = load_prompt()
 
     n_standard = BATCH_SIZE - ADVERSARIAL_TOPIC_COUNT
-    standard_topics = random.sample(TOPICS, min(n_standard, len(TOPICS)))
+    topic_rng = random.Random(run_num)
+    standard_topics = topic_rng.sample(TOPICS, min(n_standard, len(TOPICS)))
     adversarial_topics = generate_adversarial_topics(anthropic_client, weakest)
     topics = standard_topics + adversarial_topics
     random.shuffle(topics)
@@ -506,9 +525,8 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
             print(f"  Bottleneck: {bottleneck_name}")
 
         print(f"  Mutating prompt ({mode} mode)...")
-        base_prompt = BEST_PROMPT_FILE.read_text().strip() if BEST_PROMPT_FILE.exists() else prompt
         new_prompt = mutate_prompt(
-            anthropic_client, base_prompt, eval_results,
+            anthropic_client, prompt, eval_results,
             state["best_score"], explore=is_plateau,
             bottleneck=bottleneck_name, frontier=frontier,
         )
@@ -589,10 +607,6 @@ def main():
         i += 1
 
         print(f"\n  Cycle took {elapsed:.0f}s")
-
-        #if detect_plateau(state["best_score"], window=PLATEAU_WINDOW):
-        #    print(f"\n  Early stopping: no improvement in {PLATEAU_WINDOW} consecutive runs.")
-        #    break
 
     print(f"\nDone. Best score: {state['best_score']}/{MAX_SCORE}")
     if BEST_PROMPT_FILE.exists():

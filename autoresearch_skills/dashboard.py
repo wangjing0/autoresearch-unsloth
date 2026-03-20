@@ -43,7 +43,7 @@ HTML = r"""<!DOCTYPE html>
   .badge-mode { background: #8e44ad; margin-left: 4px; }
   .subtitle { color: #8a8580; font-size: 14px; margin-top: 4px; }
 
-  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 32px; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 32px; }
   .stat-card { background: white; border-radius: 12px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .stat-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #8a8580; margin-bottom: 6px; }
   .stat-value { font-size: 28px; font-weight: 700; }
@@ -61,15 +61,6 @@ HTML = r"""<!DOCTYPE html>
   .chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
   .legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
-  .criteria-bar { background: white; border-radius: 12px; padding: 20px 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 32px; }
-  .criteria-bar h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #8a8580; margin-bottom: 14px; }
-  .criteria-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
-  .crit-item { text-align: center; }
-  .crit-item .crit-avg { font-size: 28px; font-weight: 700; }
-  .crit-item .crit-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #8a8580; margin-top: 2px; }
-  .crit-item .crit-bar { height: 6px; border-radius: 3px; background: #eee; margin-top: 6px; overflow: hidden; }
-  .crit-item .crit-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
-
   .section { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 32px; }
   .section h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #8a8580; margin-bottom: 16px; }
 
@@ -82,18 +73,6 @@ HTML = r"""<!DOCTYPE html>
   .mode-explore { color: #d35400; font-weight: 600; }
   .weakest-tag { background: #fef3e7; color: #c0784a; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
 
-  .frontier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
-  .frontier-card { background: #faf9f7; border-radius: 8px; padding: 14px; border: 1px solid #eee; }
-  .frontier-card .fc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .frontier-card .fc-score { font-size: 20px; font-weight: 700; color: #2d2a26; }
-  .frontier-card .fc-pct { font-size: 13px; color: #8a8580; font-weight: 600; }
-  .frontier-card .fc-run { font-size: 11px; color: #8a8580; }
-  .frontier-card .fc-criteria { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-bottom: 8px; }
-  .frontier-card .fc-crit { text-align: center; font-size: 11px; }
-  .frontier-card .fc-crit-val { font-size: 14px; font-weight: 700; }
-  .frontier-card .fc-crit-label { color: #8a8580; font-size: 8px; text-transform: uppercase; }
-  .frontier-card .fc-prompt { font-family: 'SF Mono', monospace; font-size: 11px; color: #6a6560; line-height: 1.4; max-height: 60px; overflow: hidden; text-overflow: ellipsis; }
-
   .prompts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 32px; }
   .prompt-container { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .prompt-container h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #8a8580; margin-bottom: 12px; }
@@ -101,7 +80,6 @@ HTML = r"""<!DOCTYPE html>
 
   @media (max-width: 768px) {
     .stats { grid-template-columns: repeat(3, 1fr); }
-    .criteria-grid { grid-template-columns: repeat(3, 1fr); }
     .prompts-grid { grid-template-columns: 1fr; }
     body { padding: 16px; }
   }
@@ -135,11 +113,6 @@ HTML = r"""<!DOCTYPE html>
     <div class="stat-value green" id="stat-improvement">--</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Frontier</div>
-    <div class="stat-value purple" id="stat-frontier">--</div>
-    <div class="stat-sub" id="stat-frontier-sub"></div>
-  </div>
-  <div class="stat-card">
     <div class="stat-label">Weakest</div>
     <div class="stat-value blue" id="stat-weakest">--</div>
   </div>
@@ -150,11 +123,6 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<div class="criteria-bar" id="criteria-bar" style="display:none;">
-  <h3>Latest Criteria Scores (0-10 scale)</h3>
-  <div class="criteria-grid" id="criteria-grid"></div>
-</div>
-
 <div class="chart-container">
   <h3>Score Over Time (max 10.00)</h3>
   <canvas id="mainChart"></canvas>
@@ -163,11 +131,6 @@ HTML = r"""<!DOCTYPE html>
     <span><span class="legend-dot" style="background:#d35400"></span> EXPLORE</span>
     <span><span class="legend-dot" style="background:#c0784a"></span> New best</span>
   </div>
-</div>
-
-<div class="section" id="frontier-section" style="display:none;">
-  <h3>Pareto Frontier</h3>
-  <div class="frontier-grid" id="frontier-grid"></div>
 </div>
 
 <div class="section">
@@ -268,26 +231,6 @@ function updateMainChart(runs) {
   mainChart.update('none');
 }
 
-function renderCriteriaBar(lastRun) {
-  const bar = document.getElementById('criteria-bar');
-  const grid = document.getElementById('criteria-grid');
-  const s10 = lastRun.scores;
-  if (!s10) { bar.style.display = 'none'; return; }
-  bar.style.display = '';
-
-  const scoreColor = v => v >= 8 ? GREEN : v >= 6 ? BLUE : v >= 4 ? ORANGE : '#c0392b';
-  grid.innerHTML = CRIT_KEYS.map(c => {
-    const val = s10[c] ?? 0;
-    const pct = (val / 10 * 100).toFixed(0);
-    const color = CRIT_COLORS[c] || '#8a8580';
-    return `<div class="crit-item">
-      <div class="crit-avg" style="color:${scoreColor(val)}">${val.toFixed(1)}</div>
-      <div class="crit-label">${CRIT_LABELS[c] || c}</div>
-      <div class="crit-bar"><div class="crit-bar-fill" style="width:${pct}%;background:${color}"></div></div>
-    </div>`;
-  }).join('');
-}
-
 async function fetchData() {
   try {
     const res = await fetch('/api/data');
@@ -304,29 +247,6 @@ function formatTime(iso) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function renderFrontier(frontier) {
-  const section = document.getElementById('frontier-section');
-  const grid = document.getElementById('frontier-grid');
-  if (!frontier || frontier.length === 0) { section.style.display = 'none'; return; }
-  section.style.display = '';
-
-  const critColor = (val) => val >= 8 ? GREEN : val >= 6 ? BLUE : val >= 4 ? ORANGE : '#c0392b';
-  grid.innerHTML = frontier.map(m => {
-    const overall = m.overall ?? 0;
-    const s10 = m.scores || m;
-    return `<div class="frontier-card">
-      <div class="fc-header">
-        <div><span class="fc-score">${typeof overall === 'number' ? overall.toFixed(2) : overall}</span><span style="color:#8a8580;font-size:13px">/10</span></div>
-        <div class="fc-run">Run ${m.run ?? '?'}</div>
-      </div>
-      <div class="fc-criteria">
-        ${CRIT_KEYS.map(c => { const v = s10[c] ?? 0; return `<div class="fc-crit"><div class="fc-crit-val" style="color:${critColor(v)}">${typeof v === 'number' ? v.toFixed(1) : v}</div><div class="fc-crit-label">${CRIT_LABELS[c] || c}</div></div>`; }).join('')}
-      </div>
-      <div class="fc-prompt">${(m.prompt || '').substring(0, 150).replace(/</g, '&lt;')}...</div>
-    </div>`;
-  }).join('');
-}
-
 async function refresh() {
   const data = await fetchData();
   if (!data || !data.runs || data.runs.length === 0) return;
@@ -336,7 +256,6 @@ async function refresh() {
   const baseline = scores[0];
   const best = Math.max(...scores);
   const lastRun = runs[runs.length - 1];
-  const frontier = data.frontier || [];
   // Stats
   document.getElementById('stat-best').textContent = (typeof best === 'number' ? best.toFixed(2) : best) + '/10';
   document.getElementById('stat-best-sub').textContent = '';
@@ -345,9 +264,6 @@ async function refresh() {
   const improvEl = document.getElementById('stat-improvement');
   improvEl.textContent = improvement === '--' ? '--' : (improvement > 0 ? '+' : '') + improvement + '%';
   improvEl.className = 'stat-value ' + (improvement > 0 ? 'green' : improvement < 0 ? 'orange' : 'neutral');
-
-  document.getElementById('stat-frontier').textContent = frontier.length;
-  document.getElementById('stat-frontier-sub').textContent = frontier.length === 1 ? 'member' : 'members';
 
   document.getElementById('stat-weakest').textContent = lastRun.weakest || '--';
 
@@ -361,14 +277,8 @@ async function refresh() {
   modeBadge.textContent = lastMode;
   modeBadge.style.background = lastMode === 'EXPLORE' ? '#d35400' : '#2980b9';
 
-  // Criteria averages bar
-  renderCriteriaBar(lastRun);
-
   // Main chart
   updateMainChart(runs);
-
-  // Frontier
-  renderFrontier(frontier);
 
   // Table
   const tbody = document.getElementById('run-table');
@@ -399,7 +309,7 @@ async function refresh() {
 
   // Subtitle
   document.getElementById('subtitle').textContent =
-    `Pareto frontier -- ${runs.length} runs -- frontier: ${frontier.length} -- best: ${typeof best === 'number' ? best.toFixed(2) : best}/10 -- last: ${formatTime(lastRun?.timestamp)}`;
+    `Pareto frontier -- ${runs.length} runs -- best: ${typeof best === 'number' ? best.toFixed(2) : best}/10 -- last: ${formatTime(lastRun?.timestamp)}`;
 }
 
 initCharts();
@@ -435,15 +345,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                         except json.JSONDecodeError:
                             pass
 
-            frontier = []
-            if FRONTIER_FILE.exists():
-                for line in FRONTIER_FILE.read_text().strip().split("\n"):
-                    if line.strip():
-                        try:
-                            frontier.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-
             initial_prompt = ""
             if INITIAL_PROMPT_FILE.exists():
                 initial_prompt = INITIAL_PROMPT_FILE.read_text().strip()
@@ -454,7 +355,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
             data = {
                 "runs": runs,
-                "frontier": frontier,
                 "initial_prompt": initial_prompt,
                 "best_prompt": best_prompt,
             }
