@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fixed evaluation harness, constants, and utilities for diagram autoresearch.
-Do not modify — this is the ground truth eval, analogous to prepare.py in
+Do not modify -- this is the ground truth eval, analogous to prepare.py in
 the original autoresearch pattern.
 
 Provides: constants, file paths, topics, eval prompt, evaluate_one(),
@@ -40,6 +40,7 @@ BATCH_SIZE = 10
 CYCLE_SECONDS = 120
 MAX_GEN_WORKERS = 3
 MAX_EVAL_WORKERS = 5
+PLATEAU_WINDOW = 3
 
 # ─── Diagram Topics (diverse structures) ─────────────────────────────────────
 
@@ -76,27 +77,61 @@ TOPICS = [
     "Rate limiting: request to counter check to allow or reject to update counter",
 ]
 
-# ─── Eval Prompt (DO NOT CHANGE — this is the fixed metric) ─────────────────
-CRITERIA = ["legible", "pastel", "linear", "no_numbers"]
+# ─── Eval Prompt (DO NOT CHANGE -- this is the fixed metric) ─────────────────
 
-EVAL_PROMPT = """You are evaluating a diagram image against 4 strict criteria. Examine the image carefully.
+CRITERIA = ["text_quality", "color_palette", "layout", "label_discipline", "visual_clarity", "icon_quality"]
+MAX_SCORE = 10.0  # overall score is 0-10, aggregated from 6 criteria
 
-Criteria:
-1. LEGIBLE_AND_GRAMMATICAL: ALL text in the diagram is clearly readable — no garbled, overlapping, blurry, or cut-off text. All words are real English words spelled correctly. Sentences/phrases are grammatically correct.
+EVAL_PROMPT = """You are a strict evaluator of AI-generated technical diagrams. Score the image on 6 criteria using a 1-5 scale for each. Be demanding -- a 5 should be genuinely excellent, not merely acceptable.
 
-2. PASTEL_COLORS: The diagram uses ONLY soft pastel colors for fills (light purple, light blue, light green, light pink, light yellow, light teal, etc). No bright, saturated, neon, or dark-colored fills. White background counts as passing.
+Criteria (1 = terrible, 2 = poor, 3 = acceptable, 4 = good, 5 = excellent):
 
-3. LINEAR_LAYOUT: The diagram flows in ONE clear linear direction — either strictly left-to-right OR strictly top-to-bottom. Not circular, radial, scattered, hub-and-spoke, or multi-directional.
+1. TEXT_QUALITY (1-5): How legible and correct is the text?
+   1: Most text garbled, overlapping, or unreadable
+   2: Some words readable but multiple misspellings or garbled sections
+   3: Most text readable, minor spelling errors (1-2 words)
+   4: All text readable and correctly spelled, but spacing or sizing slightly off
+   5: Perfectly crisp, correctly spelled text with clean spacing and consistent sizing
 
-4. NO_NUMBERS: The diagram contains ZERO numbers, step numbers, ordinals (1st, 2nd, 3rd), sequence indicators (Step 1, Phase 2), or any numerical ordering. Only text labels allowed.
+2. COLOR_PALETTE (1-5): How well does it use soft pastel colors?
+   2: Mostly pastel but 1-2 elements use slightly saturated colors
+   3: All pastel fills but inconsistent palette (clashing pastels, too many hues)
+   4: Clean consistent pastel palette with good contrast against white background
+   5: Harmonious pastel palette with deliberate color coding (related concepts share hues)
+   1: Bright, saturated, neon, or dark fills dominate
 
-Rate each criterion as PASS (true) or FAIL (false). Be strict.
+3. LAYOUT (1-5): How linear and clean is the flow?
+   1: Chaotic, scattered, or circular arrangement
+   2: General direction visible but with branching, backtracking, or misaligned elements
+   3: Linear flow (left-to-right or top-to-bottom) but with minor alignment issues or crowding
+   4: Clean linear flow with consistent spacing, but arrows or connectors slightly messy
+   5: Perfectly aligned linear chain with uniform spacing, clean arrows, and visual rhythm
+
+4. LABEL_DISCIPLINE (1-5): Are labels concise and free of numbers/ordinals?
+   1: Contains step numbers, ordinals, version numbers, or excessive text per label
+   2: No numbers but labels are verbose (full sentences) or inconsistent in style
+   3: Short labels, no numbers, but some labels are vague or too abbreviated
+   4: Concise, descriptive labels (2-4 words each), no numbers, consistent style
+   5: Perfect labeling -- each box has a clear, concise, descriptive label with consistent capitalization and no numbers
+
+5. VISUAL_CLARITY (1-5): How clean and professional does the overall diagram look?
+   1: Cluttered, overlapping elements, hard to follow
+   2: Followable but visually noisy (thick borders, drop shadows, unnecessary decoration)
+   3: Clean overall but inconsistent styling (mixed border widths, uneven shapes)
+   4: Professional appearance with consistent styling, good whitespace usage
+   5: Publication-quality -- could appear in a textbook. Balanced composition, intentional whitespace, consistent visual hierarchy
+
+6. ICON_QUALITY (1-5): How well do the icons/symbols inside boxes work?
+   1: No icons, or icons are garbled/unrecognizable
+   2: Some icons present but inconsistent (some boxes have them, others don't) or poorly drawn
+   3: Icons in most boxes, recognizable but generic
+   4: Clear, relevant icons in all boxes that help convey meaning
+   5: Excellent icons -- simple, relevant, consistently styled line-art that enhances understanding
 
 Respond in this exact JSON format:
-{"legible_and_grammatical": true, "pastel_colors": true, "linear_layout": true, "no_numbers": true, "failures": []}
+{"text_quality": 3, "color_palette": 4, "layout": 3, "label_discipline": 4, "visual_clarity": 3, "icon_quality": 2, "failures": ["specific issue 1", "specific issue 2"]}
 
-If any criterion fails, set it to false and add a brief description to the failures array. Example:
-{"legible_and_grammatical": false, "pastel_colors": true, "linear_layout": true, "no_numbers": false, "failures": ["Text 'Procssing' is misspelled", "Contains 'Step 1', 'Step 2' labels"]}"""
+Always include at least one entry in failures describing the most significant shortcoming, even for high scores. Be specific about what you see."""
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -123,7 +158,7 @@ def save_prompt(prompt: str):
 
 
 def evaluate_one(anthropic_client, image_path: Path) -> dict | None:
-    """Evaluate a single diagram against 4 criteria via Claude vision."""
+    """Evaluate a single diagram on 6 criteria (1-5 scale each) via Claude vision."""
     image_bytes = image_path.read_bytes()
     b64 = base64.b64encode(image_bytes).decode()
 
@@ -154,16 +189,27 @@ def evaluate_one(anthropic_client, image_path: Path) -> dict | None:
             if text.startswith("json"):
                 text = text[4:]
             text = text.strip()
-        return json.loads(text)
+        result = json.loads(text)
+        for c in CRITERIA:
+            if c in result:
+                result[c] = max(1, min(5, int(result[c])))
+        return result
     except Exception as e:
         print(f"    EVAL ERROR: {e}")
         return None
 
 
 def score_batch(eval_results: list[dict]) -> dict:
-    """Compute per-criterion and total scores from a batch of eval results."""
-    leg = sum(1 for r in eval_results if r.get("legible_and_grammatical"))
-    col = sum(1 for r in eval_results if r.get("pastel_colors"))
-    lin = sum(1 for r in eval_results if r.get("linear_layout"))
-    num = sum(1 for r in eval_results if r.get("no_numbers"))
-    return {"legible": leg, "pastel": col, "linear": lin, "no_numbers": num, "total": leg + col + lin + num}
+    """Compute per-criterion scores (0-10) and overall score (0-10, 2 decimal).
+
+    Each criterion raw average (1-5) is mapped to 0-10 via (avg-1)/4*10.
+    Overall score = mean of all 6 dimension scores, rounded to 2 decimals.
+    """
+    if not eval_results:
+        scores_10 = {c: 0.0 for c in CRITERIA}
+        return {"scores": scores_10, "overall": 0.0, "max": MAX_SCORE, "raw_avgs": {c: 1.0 for c in CRITERIA}}
+    n = len(eval_results)
+    raw_avgs = {c: sum(r.get(c, 1) for r in eval_results) / n for c in CRITERIA}
+    scores_10 = {c: round((raw_avgs[c] - 1) / 4 * 10, 2) for c in CRITERIA}
+    overall = round(sum(scores_10.values()) / len(CRITERIA), 2)
+    return {"scores": scores_10, "overall": overall, "max": MAX_SCORE, "raw_avgs": raw_avgs}

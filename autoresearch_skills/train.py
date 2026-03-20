@@ -2,7 +2,7 @@
 """
 Diagram Autoresearch -- Pareto frontier prompt optimization.
 
-Maintains a Pareto frontier of non-dominated prompts across 4 criteria.
+Maintains a Pareto frontier of non-dominated prompts across 6 graded criteria.
 Uses LLM-generated adversarial topics to stress-test weak criteria.
 Selects parents from the frontier weighted toward the weakest dimension.
 
@@ -33,13 +33,22 @@ from autoresearch_skills.prepare import (
     GEN_MODEL, EVAL_MODEL, MUTATE_MODEL,
     BASE_DIR, BEST_PROMPT_FILE, RESULTS_FILE, DIAGRAMS_DIR,
     BATCH_SIZE, CYCLE_SECONDS, MAX_GEN_WORKERS, MAX_EVAL_WORKERS,
-    TOPICS, CRITERIA,
+    TOPICS, CRITERIA, MAX_SCORE, PLATEAU_WINDOW,
     evaluate_one, score_batch,
     load_state, save_state, load_prompt, save_prompt,
 )
 
 FRONTIER_FILE = BASE_DIR / "frontier.jsonl"
 ADVERSARIAL_TOPIC_COUNT = 3
+
+CRITERIA_LABELS = {
+    "text_quality": "Text Quality",
+    "color_palette": "Color Palette",
+    "layout": "Layout",
+    "label_discipline": "Label Discipline",
+    "visual_clarity": "Visual Clarity",
+    "icon_quality": "Icon Quality",
+}
 
 # ─── Pareto Frontier ─────────────────────────────────────────────────────────
 
@@ -85,7 +94,7 @@ def save_frontier(frontier: list[dict]):
 def find_weakest_criterion(frontier: list[dict]) -> str:
     """Identify which criterion has the lowest max score across the frontier."""
     if not frontier:
-        return "legible"
+        return "text_quality"
     best_per = {c: max(m.get(c, 0) for m in frontier) for c in CRITERIA}
     return min(best_per, key=best_per.get)
 
@@ -121,17 +130,21 @@ For the "{criterion}" criterion, create topics that are particularly challenging
 Return ONLY {count} topics, one per line. No numbering, no bullets, no explanation."""
 
 CRITERION_DESCRIPTIONS = {
-    "legible": "All text in the diagram must be clearly readable, correctly spelled English words",
-    "pastel": "The diagram uses only soft pastel colors for fills, no bright or dark colors",
-    "linear": "The diagram flows in one clear linear direction, not circular or branching",
-    "no_numbers": "The diagram contains zero numbers, step numbers, or ordinals",
+    "text_quality": "All text must be crisp, correctly spelled, consistently sized, and well-spaced",
+    "color_palette": "Must use harmonious soft pastel colors with deliberate color coding",
+    "layout": "Must flow in a perfectly aligned linear chain with uniform spacing",
+    "label_discipline": "Labels must be concise (2-4 words), no numbers or ordinals, consistent style",
+    "visual_clarity": "Must look publication-quality with balanced composition and consistent styling",
+    "icon_quality": "Must have clear, relevant, consistently styled line-art icons in every box",
 }
 
 STRESS_INSTRUCTIONS = {
-    "legible": "Include topics with long technical terms (e.g., 'Authentication', 'Orchestration', 'Preprocessing') and domain-specific jargon that image models commonly misspell. The more complex the vocabulary, the better the stress test.",
-    "pastel": "Include topics where the subject matter naturally suggests strong, vivid colors (e.g., alerting systems, error states, traffic lights) to test whether the prompt can override default color choices.",
-    "linear": "Include topics with inherently branching or circular structures (e.g., feedback loops, decision trees, hub-and-spoke architectures) to test whether the prompt can force linear layout.",
-    "no_numbers": "Include topics that naturally involve counting, versioning, or sequencing (e.g., version control, phased rollouts, tiered pricing) to test whether the prompt can suppress numbers.",
+    "text_quality": "Include topics with long technical terms (e.g., 'Authentication', 'Orchestration', 'Preprocessing') and domain jargon that image models commonly misspell.",
+    "color_palette": "Include topics where the subject matter naturally suggests strong, vivid colors (e.g., alerting systems, error states, traffic lights) to test whether the prompt can override defaults.",
+    "layout": "Include topics with inherently branching or circular structures (e.g., feedback loops, decision trees, hub-and-spoke) to test whether the prompt can force linear layout.",
+    "label_discipline": "Include topics that naturally involve counting, versioning, or sequencing (e.g., version control, phased rollouts, tiered pricing) to test whether the prompt can suppress numbers.",
+    "visual_clarity": "Include topics with many components (8+ steps) that risk visual clutter, overlapping elements, or inconsistent styling.",
+    "icon_quality": "Include topics with abstract or hard-to-iconify concepts (e.g., 'governance', 'compliance', 'abstraction layer') to test whether the model can produce relevant icons.",
 }
 
 
@@ -159,18 +172,20 @@ def generate_adversarial_topics(anthropic_client, weakest: str, count: int = ADV
 
 # ─── Mutation Templates ──────────────────────────────────────────────────────
 
-REFINE_TEMPLATE = """You are optimizing a text-to-image prompt for generating technical diagrams. The prompt is sent to Gemini's image generation model. Your goal: modify it so generated diagrams consistently pass ALL 4 evaluation criteria.
+REFINE_TEMPLATE = """You are optimizing a text-to-image prompt for generating technical diagrams. The prompt is sent to Gemini's image generation model. Diagrams are scored on 6 criteria, each normalized to 0-10. Overall score is the mean of all 6, max 10.00.
 
 CURRENT PROMPT:
 ---
 {current_prompt}
 ---
 
-LAST BATCH RESULTS ({score}/40):
-- Legible & grammatical: {leg_rate}/10
-- Pastel colors: {col_rate}/10
-- Linear layout: {lin_rate}/10
-- No numbers/ordinals: {num_rate}/10
+LAST BATCH: overall {overall}/10
+- Text Quality:      {s_text_quality}/10
+- Color Palette:     {s_color_palette}/10
+- Layout:            {s_layout}/10
+- Label Discipline:  {s_label_discipline}/10
+- Visual Clarity:    {s_visual_clarity}/10
+- Icon Quality:      {s_icon_quality}/10
 
 COMMON FAILURES:
 {failures}
@@ -180,19 +195,22 @@ COMMON FAILURES:
 {focus_instructions}
 
 RULES FOR YOUR MODIFICATION:
-- Keep the core whiteboard/hand-drawn aesthetic
+- Target the lowest-scoring criteria first
 - Be specific and imperative -- image models respond to direct commands
 - Keep prompt under 400 words
 - Return ONLY the new prompt text -- no explanation, no markdown fences"""
 
 EXPLORE_TEMPLATE = """You are radically redesigning a text-to-image prompt. The current approach has plateaued -- incremental tweaks no longer help. Try a FUNDAMENTALLY DIFFERENT structure.
 
+Diagrams scored on 6 criteria (0-10 each). Current scores are stuck:
+- Text Quality: {s_text_quality}/10 | Color Palette: {s_color_palette}/10 | Layout: {s_layout}/10
+- Label Discipline: {s_label_discipline}/10 | Visual Clarity: {s_visual_clarity}/10 | Icon Quality: {s_icon_quality}/10
+- Overall: {overall}/10
+
 CURRENT PROMPT (PLATEAU -- do NOT tweak, RESTRUCTURE):
 ---
 {current_prompt}
 ---
-
-SCORES (stuck): legible={leg_rate}/10, pastel={col_rate}/10, linear={lin_rate}/10, no_numbers={num_rate}/10
 
 FAILURES:
 {failures}
@@ -203,27 +221,35 @@ Try ONE of these radical approaches:
 1. MINIMALIST: Under 150 words. Strip all rule lists. Short direct commands only.
 2. REDUCE TEXT: Use 1-2 word labels max, common short words, icons over text, 4-5 boxes total.
 3. STRUCTURAL REWRITE: Describe an existing image ("This is a diagram that shows...") not instructions.
-4. EXAMPLE-DRIVEN: Describe the exact ideal diagram: "First box is light purple, says 'Input'. Arrow right to light blue box 'Process'..."
-5. NEGATIVE-SPACE: Focus on bans: "NEVER more than 2 words per label. NEVER words longer than 10 chars."
+4. EXAMPLE-DRIVEN: Describe the exact ideal diagram concretely: box colors, label text, arrow style.
+5. NEGATIVE-SPACE: Focus entirely on bans: "NEVER more than 2 words per label. NEVER words longer than 10 chars."
 
 Be bold. The current approach has provably stalled.
 
 Keep under 400 words. Return ONLY the new prompt text -- no explanation, no markdown fences."""
 
 BOTTLENECK_FOCUS = {
-    "legible": """CRITICAL FOCUS -- The main bottleneck is text legibility. Other criteria are near-perfect.
-Do NOT add more spelling rules -- the prompt already has them and they don't help.
-Try a different approach: reduce text complexity (shorter labels, fewer boxes, common short words),
-use larger bolder text, or rely more on icons than words.""",
-    "pastel": """CRITICAL FOCUS -- Colors are the bottleneck. List EXACT pastel colors to use (light purple, light blue, light green, light pink, light yellow). Explicitly ban all saturated, dark, neon, or bright fills.""",
-    "linear": """CRITICAL FOCUS -- Layout is the bottleneck. The diagram must be a single horizontal chain: Box -> Box -> Box. Explicitly ban branching, fan-out, vertical elements, return arrows, circular flows.""",
-    "no_numbers": """CRITICAL FOCUS -- Numbers keep appearing. Explicitly ban ALL digits, ordinals, step numbers, version numbers, and sequence indicators. Icons must use shapes only, never digits.""",
+    "text_quality": """CRITICAL FOCUS -- Text quality is the main bottleneck.
+Do NOT add more spelling rules -- try reducing text complexity instead.
+Shorter labels (1-2 words), common short words, larger bolder text, fewer boxes.""",
+    "color_palette": """CRITICAL FOCUS -- Color palette is the bottleneck.
+List EXACT pastel colors to use. Ban saturated/dark/neon fills explicitly.
+Ask for deliberate color coding where related concepts share hues.""",
+    "layout": """CRITICAL FOCUS -- Layout is the bottleneck.
+Must be a single horizontal chain: Box -> Box -> Box with uniform spacing.
+Ban branching, fan-out, vertical elements, return arrows, circular flows.""",
+    "label_discipline": """CRITICAL FOCUS -- Label discipline is the bottleneck.
+Ban ALL digits, ordinals, step numbers, version numbers. Require concise 2-4 word labels.
+Consistent capitalization style across all boxes.""",
+    "visual_clarity": """CRITICAL FOCUS -- Visual clarity is the bottleneck.
+Require consistent border widths, uniform box sizes, generous whitespace.
+Ban drop shadows, gradients, thick borders, decorative elements.""",
+    "icon_quality": """CRITICAL FOCUS -- Icon quality is the bottleneck.
+Require simple line-art icons in EVERY box. Icons must be relevant to the concept.
+Consistent icon style (all outline, all same stroke width). Ban empty boxes.""",
 }
 
 # ─── Plateau Detection ───────────────────────────────────────────────────────
-
-PLATEAU_WINDOW = 3
-EARLY_STOP_WINDOW = 3
 
 
 def detect_plateau(best_score: int, window: int = PLATEAU_WINDOW) -> bool:
@@ -286,7 +312,9 @@ def _frontier_context(frontier: list[dict]) -> str:
         return ""
     lines = ["OTHER FRONTIER PROMPTS (different trade-offs that also performed well):"]
     for i, m in enumerate(frontier[:5]):
-        lines.append(f"  Prompt {i+1}: legible={m.get('legible',0)}, pastel={m.get('pastel',0)}, linear={m.get('linear',0)}, no_numbers={m.get('no_numbers',0)} (total={m.get('total',0)})")
+        s10 = m.get("scores", {})
+        parts = ", ".join(f"{c}={s10.get(c, 0)}/10" for c in CRITERIA)
+        lines.append(f"  Prompt {i+1}: {parts} (overall={m.get('overall', 0)}/10)")
         preview = m.get("prompt", "")[:100].replace("\n", " ")
         lines.append(f"    Preview: {preview}...")
     lines.append("Consider borrowing techniques from prompts that score high on your weak criterion.")
@@ -297,7 +325,7 @@ def mutate_prompt(
     anthropic_client,
     current_prompt: str,
     eval_results: list[dict],
-    best_score: int,
+    best_score: float,
     explore: bool = False,
     bottleneck: str | None = None,
     frontier: list[dict] | None = None,
@@ -305,6 +333,7 @@ def mutate_prompt(
     """Use Claude to improve the prompt based on failure analysis."""
     scores = score_batch(eval_results)
     failures_text = _collect_failures(eval_results)
+    s10 = scores["scores"]
 
     focus_instructions = ""
     if bottleneck and bottleneck in BOTTLENECK_FOCUS:
@@ -315,12 +344,13 @@ def mutate_prompt(
     template = EXPLORE_TEMPLATE if explore else REFINE_TEMPLATE
     mutation_prompt = template.format(
         current_prompt=current_prompt,
-        score=scores["total"],
-        leg_rate=scores["legible"],
-        col_rate=scores["pastel"],
-        lin_rate=scores["linear"],
-        num_rate=scores["no_numbers"],
-        best_score=best_score,
+        overall=scores["overall"],
+        s_text_quality=s10.get("text_quality", 0),
+        s_color_palette=s10.get("color_palette", 0),
+        s_layout=s10.get("layout", 0),
+        s_label_discipline=s10.get("label_discipline", 0),
+        s_visual_clarity=s10.get("visual_clarity", 0),
+        s_icon_quality=s10.get("icon_quality", 0),
         failures=failures_text,
         focus_instructions=focus_instructions,
         frontier_context=frontier_ctx,
@@ -349,7 +379,6 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     is_plateau = detect_plateau(state["best_score"])
     mode = "EXPLORE" if is_plateau else "REFINE"
 
-    # Select parent prompt from frontier or fall back to current
     parent = select_parent(frontier, weakest) if frontier else None
     if parent and random.random() < 0.5:
         prompt = parent["prompt"]
@@ -357,7 +386,6 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     else:
         prompt = load_prompt()
 
-    # Mix standard topics + adversarial topics targeting the weakest criterion
     n_standard = BATCH_SIZE - ADVERSARIAL_TOPIC_COUNT
     standard_topics = random.sample(TOPICS, min(n_standard, len(TOPICS)))
     adversarial_topics = generate_adversarial_topics(anthropic_client, weakest)
@@ -365,10 +393,10 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     random.shuffle(topics)
     topics = topics[:BATCH_SIZE]
 
-    print(f"\n{'='*60}")
-    print(f"RUN {run_num} | {datetime.now().strftime('%H:%M:%S')} | Best: {state['best_score']}/40 | Mode: {mode} | Weakest: {weakest}")
+    print(f"\n{'='*70}")
+    print(f"RUN {run_num} | {datetime.now().strftime('%H:%M:%S')} | Best: {state['best_score']}/{MAX_SCORE} | Mode: {mode} | Weakest: {weakest}")
     print(f"  Frontier size: {len(frontier)} | Adversarial topics: {len(adversarial_topics)}")
-    print(f"{'='*60}")
+    print(f"{'='*70}")
 
     # ── Generate ──────────────────────────────────────────────────
     print(f"\n  Generating {len(topics)} diagrams...")
@@ -419,41 +447,32 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
 
             if result:
                 eval_results.append(result)
-                criteria_pass = sum([
-                    result.get("legible_and_grammatical", False),
-                    result.get("pastel_colors", False),
-                    result.get("linear_layout", False),
-                    result.get("no_numbers", False),
-                ])
+                diag_scores = [result.get(c, 1) for c in CRITERIA]
+                diag_avg = sum(diag_scores) / len(diag_scores)
                 fails = result.get("failures", [])
-                print(f"    [{i+1}] {criteria_pass}/4 | {'; '.join(fails) if fails else 'all pass'}")
+                print(f"    [{i+1}] avg {diag_avg:.1f}/5 | {'; '.join(fails[:2]) if fails else 'no issues'}")
             else:
-                eval_results.append({
-                    "legible_and_grammatical": False,
-                    "pastel_colors": False,
-                    "linear_layout": False,
-                    "no_numbers": False,
-                    "failures": ["eval_error"],
-                })
-                print(f"    [{i+1}] 0/4 | eval failed")
+                eval_results.append({c: 1 for c in CRITERIA} | {"failures": ["eval_error"]})
+                print(f"    [{i+1}] avg 1.0/5 | eval failed")
 
     # ── Score ─────────────────────────────────────────────────────
     scores = score_batch(eval_results)
-    score = scores["total"]
+    overall = scores["overall"]
+    s10 = scores["scores"]
 
-    print(f"\n  SCORE: {score}/40")
-    print(f"    Legible:    {scores['legible']}/10")
-    print(f"    Pastel:     {scores['pastel']}/10")
-    print(f"    Linear:     {scores['linear']}/10")
-    print(f"    No numbers: {scores['no_numbers']}/10")
+    print(f"\n  SCORE: {overall}/{MAX_SCORE}")
+    for c in CRITERIA:
+        label = CRITERIA_LABELS.get(c, c)
+        print(f"    {label:20s} {s10[c]:.2f}/10")
 
     # ── Log ───────────────────────────────────────────────────────
     log_entry = {
         "run": run_num,
         "timestamp": datetime.now().isoformat(),
-        "score": score,
-        "max": 40,
-        "criteria": scores,
+        "score": overall,
+        "max": MAX_SCORE,
+        "scores": s10,
+        "raw_avgs": scores["raw_avgs"],
         "prompt_len": len(prompt),
         "generated": len(generated),
         "mode": mode,
@@ -464,15 +483,8 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
         f.write(json.dumps(log_entry) + "\n")
 
     # ── Update Pareto frontier ────────────────────────────────────
-    candidate = {
-        "prompt": prompt,
-        "legible": scores["legible"],
-        "pastel": scores["pastel"],
-        "linear": scores["linear"],
-        "no_numbers": scores["no_numbers"],
-        "total": score,
-        "run": run_num,
-    }
+    candidate = {c: s10[c] for c in CRITERIA}
+    candidate.update({"prompt": prompt, "scores": s10, "overall": overall, "run": run_num})
     frontier, added = update_frontier(frontier, candidate)
     save_frontier(frontier)
 
@@ -482,14 +494,14 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
         print(f"\n  FRONTIER: Dominated (frontier size: {len(frontier)})")
 
     # ── Also track simple best ────────────────────────────────────
-    if score > state["best_score"]:
-        state["best_score"] = score
+    if overall > state["best_score"]:
+        state["best_score"] = overall
         BEST_PROMPT_FILE.write_text(prompt)
-        print(f"  NEW BEST! {score}/40")
+        print(f"  NEW BEST! {overall}/{MAX_SCORE}")
 
     # ── Mutate ────────────────────────────────────────────────────
-    if score < 40:
-        bottleneck_name = weakest if scores.get(weakest, 10) < 8 else None
+    if overall < MAX_SCORE:
+        bottleneck_name = weakest if s10.get(weakest, 10) < 5.0 else None
         if bottleneck_name:
             print(f"  Bottleneck: {bottleneck_name}")
 
@@ -505,7 +517,7 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
         preview = new_prompt[:200].replace("\n", " ")
         print(f"    {preview}...")
     else:
-        print("\n  PERFECT 40/40! Prompt fully optimized.")
+        print("\n  PERFECT SCORE! Prompt fully optimized.")
 
     save_state(state)
     return state
@@ -531,8 +543,7 @@ def main():
         if diagrams.exists():
             shutil.rmtree(diagrams)
             diagrams.mkdir(parents=True)
-        print("Reset: cleared results, state, frontier, best_prompt, and diagrams.")
-        return
+        print("Reset: cleared results, state, frontier, best_prompt, and diagrams. New run will start from scratch.")
 
     if not GEMINI_KEY:
         print("ERROR: GOOGLE_API_KEY not set", file=sys.stderr)
@@ -549,15 +560,15 @@ def main():
 
     gemini_client = genai.Client(api_key=GEMINI_KEY)
     anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    state = load_state() 
-   
-    print("Diagram Autoresearch (Pareto Frontier)")
+    state = load_state()
+
+    print("Diagram Autoresearch Pareto Frontier Optimization")
     print(f"  Gen model:    {GEN_MODEL}")
     print(f"  Eval model:   {EVAL_MODEL}")
     print(f"  Mutate model: {MUTATE_MODEL}")
     print(f"  Batch size:   {BATCH_SIZE}")
-    print(f"  Cycle:        {CYCLE_SECONDS}s")
-    print(f"  State:        run {state['run_number']}, best {state['best_score']}/40")
+    print(f"  Max score:    {MAX_SCORE} (mean of 6 criteria, each 0-10)")
+    print(f"  State:        run {state['run_number']}, best {state['best_score']}/{MAX_SCORE}")
     print(f"  Frontier:     {len(load_frontier())} members")
 
     if args.once:
@@ -568,6 +579,7 @@ def main():
     i = 0
     while i < max_cycles:
         start = time.time()
+        print(f"Running cycle {i+1} of {max_cycles}")
         try:
             state = run_cycle(gemini_client, anthropic_client, state)
         except Exception as e:
@@ -578,11 +590,11 @@ def main():
 
         print(f"\n  Cycle took {elapsed:.0f}s")
 
-        if detect_plateau(state["best_score"], window=EARLY_STOP_WINDOW):
-            print(f"\n  Early stopping: no improvement in {EARLY_STOP_WINDOW} consecutive runs.")
-            break
+        #if detect_plateau(state["best_score"], window=PLATEAU_WINDOW):
+        #    print(f"\n  Early stopping: no improvement in {PLATEAU_WINDOW} consecutive runs.")
+        #    break
 
-    print(f"\nDone. Best score: {state['best_score']}/40")
+    print(f"\nDone. Best score: {state['best_score']}/{MAX_SCORE}")
     if BEST_PROMPT_FILE.exists():
         print(f"Best prompt: {BEST_PROMPT_FILE}")
 

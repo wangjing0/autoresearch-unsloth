@@ -1,7 +1,7 @@
 # autoresearch
 
 Autonomous LLM research loops — give an AI agent a training setup and let it explore the hyperparameter space.
-This repo contains two independent modules, each a self-contained autonomous search loop.
+This repo contains three independent modules, each a self-contained autonomous search loop.
 
 ## autoresearch (Karpathy's original autoresearch framework)
 
@@ -36,20 +36,48 @@ enough disk space and VRAM are available. The download respects the `HF_TOKEN` e
 Models are cached under
 `~/.cache/autoresearch_unsloth/models/<model-slug>/`.
 
+## autoresearch-skills (diagram prompt optimization)
+
+An agent edits `train.py` to optimize text-to-image prompts for generating technical diagrams.
+The system generates diagrams via Gemini, evaluates them with Claude vision on 6 graded criteria
+(text quality, color palette, layout, label discipline, visual clarity, icon quality), and uses
+Pareto frontier optimization to maintain a diverse set of non-dominated prompts. The human
+defines evaluation criteria in `prepare.py`; the agent searches for the best prompt strategies
+in `train.py`.
+
+```bash
+uv sync
+# set GOOGLE_API_KEY and ANTHROPIC_API_KEY in .env
+uv run python autoresearch_skills/train.py --once    # single cycle (~2 min)
+uv run python autoresearch_skills/train.py --cycles 5 # run 5 cycles
+uv run python autoresearch_skills/dashboard.py        # live dashboard at localhost:8501
+uv run python autoresearch_skills/train.py --reset    # reset all state
+```
+
+**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), Google API key (Gemini), Anthropic API key (Claude). No GPU required.
+
+The optimization uses Pareto frontier search across 6 criteria (each scored 0-10, overall 0-10),
+LLM-generated adversarial topics that stress-test the weakest criterion, and two mutation modes
+(REFINE for incremental improvement, EXPLORE for radical restructuring when scores plateau).
+See [`autoresearch_skills/program.md`](autoresearch_skills/program.md) for full details.
+
 ## Running the agent
 
-For either module, spin up Claude Code (or any coding agent), then prompt:
+For any module, spin up Claude Code (or any coding agent), then prompt:
 
 ```
 Have a look at autoresearch/program.md and let's kick off a new experiment.
 # or
 Have a look at autoresearch_unsloth/program_unsloth.md and let's kick off a new experiment.
+# or
+Have a look at autoresearch_skills/program.md and let's kick off a new experiment.
 ```
 
 ## Visualizing progress
 
 ```bash
-uv run autoresearch_unsloth/plot_progress.py # output the progress chart progress_unsloth.png
+uv run autoresearch_unsloth/plot_progress.py          # output progress_unsloth.png
+uv run python autoresearch_skills/dashboard.py         # live web dashboard at localhost:8501
 ```
 
 ## References

@@ -15,10 +15,11 @@ import pytest
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent
 
-# Ensure the package is importable
 sys.path.insert(0, str(SKILLS_DIR.parent))
 
 MOD_PREFIX = "autoresearch_skills"
+
+CRITERIA_KEYS = ["text_quality", "color_palette", "layout", "label_discipline", "visual_clarity", "icon_quality"]
 
 
 # ---------------------------------------------------------------------------
@@ -92,67 +93,69 @@ def test_models():
     assert "claude" in MUTATE_MODEL
 
 
+def test_criteria_count():
+    from autoresearch_skills.prepare import CRITERIA, MAX_SCORE
+    assert len(CRITERIA) == 6
+    assert MAX_SCORE == 10.0
+
+
 def test_eval_prompt_mentions_all_criteria():
     from autoresearch_skills.prepare import EVAL_PROMPT
-    for keyword in ["LEGIBLE_AND_GRAMMATICAL", "PASTEL_COLORS", "LINEAR_LAYOUT", "NO_NUMBERS"]:
+    for keyword in ["TEXT_QUALITY", "COLOR_PALETTE", "LAYOUT", "LABEL_DISCIPLINE", "VISUAL_CLARITY", "ICON_QUALITY"]:
         assert keyword in EVAL_PROMPT
 
 
 # ---------------------------------------------------------------------------
-# prepare.py: score_batch
+# prepare.py: score_batch (graded 1-5 scale)
 # ---------------------------------------------------------------------------
 
-def test_score_batch_all_pass():
-    from autoresearch_skills.prepare import score_batch
-    results = [
-        {"legible_and_grammatical": True, "pastel_colors": True, "linear_layout": True, "no_numbers": True}
-        for _ in range(10)
-    ]
-    scores = score_batch(results)
-    assert scores["total"] == 40
-    assert scores["legible"] == 10
-    assert scores["pastel"] == 10
-    assert scores["linear"] == 10
-    assert scores["no_numbers"] == 10
+def _make_result(scores_dict):
+    return {c: scores_dict.get(c, 1) for c in CRITERIA_KEYS}
 
 
-def test_score_batch_all_fail():
+def test_score_batch_all_perfect():
     from autoresearch_skills.prepare import score_batch
-    results = [
-        {"legible_and_grammatical": False, "pastel_colors": False, "linear_layout": False, "no_numbers": False}
-        for _ in range(10)
-    ]
+    results = [_make_result({c: 5 for c in CRITERIA_KEYS}) for _ in range(10)]
     scores = score_batch(results)
-    assert scores["total"] == 0
+    assert scores["overall"] == 10.0
+    assert scores["max"] == 10.0
+    for c in CRITERIA_KEYS:
+        assert scores["scores"][c] == 10.0
+
+
+def test_score_batch_all_minimum():
+    from autoresearch_skills.prepare import score_batch
+    results = [_make_result({c: 1 for c in CRITERIA_KEYS}) for _ in range(10)]
+    scores = score_batch(results)
+    assert scores["overall"] == 0.0
+    for c in CRITERIA_KEYS:
+        assert scores["scores"][c] == 0.0
 
 
 def test_score_batch_mixed():
     from autoresearch_skills.prepare import score_batch
     results = [
-        {"legible_and_grammatical": True, "pastel_colors": False, "linear_layout": True, "no_numbers": False},
-        {"legible_and_grammatical": False, "pastel_colors": True, "linear_layout": False, "no_numbers": True},
+        _make_result({"text_quality": 5, "color_palette": 3, "layout": 4, "label_discipline": 2, "visual_clarity": 3, "icon_quality": 1}),
+        _make_result({"text_quality": 3, "color_palette": 5, "layout": 2, "label_discipline": 4, "visual_clarity": 1, "icon_quality": 3}),
     ]
     scores = score_batch(results)
-    assert scores["legible"] == 1
-    assert scores["pastel"] == 1
-    assert scores["linear"] == 1
-    assert scores["no_numbers"] == 1
-    assert scores["total"] == 4
+    assert scores["scores"]["text_quality"] == 7.5  # avg 4, (4-1)/4*10 = 7.5
+    assert scores["scores"]["color_palette"] == 7.5
+    assert scores["raw_avgs"]["text_quality"] == 4.0
 
 
 def test_score_batch_empty():
     from autoresearch_skills.prepare import score_batch
     scores = score_batch([])
-    assert scores["total"] == 0
+    assert scores["overall"] == 0.0
 
 
-def test_score_batch_missing_keys():
+def test_score_batch_missing_keys_default_to_1():
     from autoresearch_skills.prepare import score_batch
-    results = [{"legible_and_grammatical": True}]
+    results = [{"text_quality": 5}]
     scores = score_batch(results)
-    assert scores["legible"] == 1
-    assert scores["pastel"] == 0
-    assert scores["total"] == 1
+    assert scores["scores"]["text_quality"] == 10.0
+    assert scores["scores"]["color_palette"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +178,9 @@ def test_load_state_default(tmp_data_dir):
 
 def test_save_load_state_roundtrip(tmp_data_dir):
     from autoresearch_skills.prepare import save_state, load_state
-    save_state({"best_score": 32, "run_number": 5})
+    save_state({"best_score": 180, "run_number": 5})
     state = load_state()
-    assert state["best_score"] == 32
+    assert state["best_score"] == 180
     assert state["run_number"] == 5
 
 
@@ -194,7 +197,7 @@ def test_load_prompt_strips_whitespace(tmp_data_dir):
 
 
 # ---------------------------------------------------------------------------
-# prepare.py: evaluate_one (mocked API)
+# prepare.py: evaluate_one (mocked API, graded response)
 # ---------------------------------------------------------------------------
 
 def test_evaluate_one_success(tmp_path):
@@ -206,11 +209,9 @@ def test_evaluate_one_success(tmp_path):
     mock_response = MagicMock()
     mock_response.content = [MagicMock()]
     mock_response.content[0].text = json.dumps({
-        "legible_and_grammatical": True,
-        "pastel_colors": True,
-        "linear_layout": False,
-        "no_numbers": True,
-        "failures": ["Layout is radial"]
+        "text_quality": 4, "color_palette": 5, "layout": 3,
+        "label_discipline": 4, "visual_clarity": 3, "icon_quality": 2,
+        "failures": ["Icons inconsistent"]
     })
 
     mock_client = MagicMock()
@@ -218,9 +219,32 @@ def test_evaluate_one_success(tmp_path):
 
     result = evaluate_one(mock_client, img_path)
     assert result is not None
-    assert result["legible_and_grammatical"] is True
-    assert result["linear_layout"] is False
-    assert result["failures"] == ["Layout is radial"]
+    assert result["text_quality"] == 4
+    assert result["icon_quality"] == 2
+    assert result["failures"] == ["Icons inconsistent"]
+
+
+def test_evaluate_one_clamps_scores(tmp_path):
+    from autoresearch_skills.prepare import evaluate_one
+
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock()]
+    mock_response.content[0].text = json.dumps({
+        "text_quality": 7, "color_palette": 0, "layout": 3,
+        "label_discipline": 4, "visual_clarity": 3, "icon_quality": -1,
+        "failures": []
+    })
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    result = evaluate_one(mock_client, img_path)
+    assert result["text_quality"] == 5
+    assert result["color_palette"] == 1
+    assert result["icon_quality"] == 1
 
 
 def test_evaluate_one_markdown_fenced(tmp_path):
@@ -229,7 +253,7 @@ def test_evaluate_one_markdown_fenced(tmp_path):
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
-    fenced = '```json\n{"legible_and_grammatical": true, "pastel_colors": true, "linear_layout": true, "no_numbers": true, "failures": []}\n```'
+    fenced = '```json\n{"text_quality": 4, "color_palette": 4, "layout": 4, "label_discipline": 4, "visual_clarity": 4, "icon_quality": 4, "failures": []}\n```'
     mock_response = MagicMock()
     mock_response.content = [MagicMock()]
     mock_response.content[0].text = fenced
@@ -239,7 +263,7 @@ def test_evaluate_one_markdown_fenced(tmp_path):
 
     result = evaluate_one(mock_client, img_path)
     assert result is not None
-    assert result["legible_and_grammatical"] is True
+    assert result["text_quality"] == 4
 
 
 def test_evaluate_one_api_error(tmp_path):
@@ -270,11 +294,11 @@ def test_mutate_prompt():
     mock_client.messages.create.return_value = mock_response
 
     eval_results = [
-        {"legible_and_grammatical": True, "pastel_colors": False, "linear_layout": True, "no_numbers": False, "failures": ["dark blue fill", "Step 1 label"]},
-        {"legible_and_grammatical": True, "pastel_colors": True, "linear_layout": False, "no_numbers": True, "failures": ["circular layout"]},
+        {"text_quality": 4, "color_palette": 2, "layout": 4, "label_discipline": 3, "visual_clarity": 3, "icon_quality": 2, "failures": ["dark blue fill", "Step 1 label"]},
+        {"text_quality": 3, "color_palette": 4, "layout": 2, "label_discipline": 4, "visual_clarity": 2, "icon_quality": 3, "failures": ["circular layout"]},
     ]
 
-    result = mutate_prompt(mock_client, "current prompt", eval_results, 30)
+    result = mutate_prompt(mock_client, "current prompt", eval_results, 150)
     assert result == "improved prompt text"
 
     call_args = mock_client.messages.create.call_args
@@ -294,37 +318,50 @@ def test_mutate_prompt_deduplicates_failures():
     mock_client.messages.create.return_value = mock_response
 
     eval_results = [
-        {"legible_and_grammatical": False, "pastel_colors": True, "linear_layout": True, "no_numbers": True, "failures": ["garbled text"]},
-        {"legible_and_grammatical": False, "pastel_colors": True, "linear_layout": True, "no_numbers": True, "failures": ["garbled text"]},
+        {"text_quality": 2, "color_palette": 4, "layout": 4, "label_discipline": 4, "visual_clarity": 3, "icon_quality": 3, "failures": ["garbled text"]},
+        {"text_quality": 2, "color_palette": 4, "layout": 4, "label_discipline": 4, "visual_clarity": 3, "icon_quality": 3, "failures": ["garbled text"]},
     ]
 
-    mutate_prompt(mock_client, "prompt", eval_results, 20)
+    mutate_prompt(mock_client, "prompt", eval_results, 100)
     prompt_text = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
     assert prompt_text.count("garbled text") == 1
 
 
 # ---------------------------------------------------------------------------
-# train.py: MUTATION_TEMPLATE format fields
+# train.py: template format fields
 # ---------------------------------------------------------------------------
 
 def test_refine_template_format_fields():
     from autoresearch_skills.train import REFINE_TEMPLATE
-    required_fields = ["current_prompt", "score", "leg_rate", "col_rate", "lin_rate", "num_rate", "failures", "focus_instructions", "frontier_context"]
+    required_fields = ["current_prompt", "overall", "failures", "focus_instructions", "frontier_context"]
     for field in required_fields:
         assert f"{{{field}}}" in REFINE_TEMPLATE, f"REFINE_TEMPLATE missing placeholder '{field}'"
+    for c in CRITERIA_KEYS:
+        assert f"{{s_{c}}}" in REFINE_TEMPLATE, f"REFINE_TEMPLATE missing criterion 's_{c}'"
 
 
 def test_explore_template_format_fields():
     from autoresearch_skills.train import EXPLORE_TEMPLATE
-    required_fields = ["current_prompt", "leg_rate", "col_rate", "lin_rate", "num_rate", "failures", "frontier_context"]
+    required_fields = ["current_prompt", "overall", "failures", "frontier_context"]
     for field in required_fields:
         assert f"{{{field}}}" in EXPLORE_TEMPLATE, f"EXPLORE_TEMPLATE missing placeholder '{field}'"
 
 
+# ---------------------------------------------------------------------------
+# train.py: Pareto frontier (uses new 6 criteria)
+# ---------------------------------------------------------------------------
+
+def _make_frontier_entry(**overrides):
+    base = {c: 30 for c in CRITERIA_KEYS}
+    base.update({"prompt": "test", "total": sum(base.values()), "run": 1})
+    base.update(overrides)
+    return base
+
+
 def test_pareto_dominates():
     from autoresearch_skills.train import dominates
-    a = {"legible": 10, "pastel": 10, "linear": 10, "no_numbers": 10}
-    b = {"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10}
+    a = _make_frontier_entry(text_quality=40)
+    b = _make_frontier_entry(text_quality=30)
     assert dominates(a, b)
     assert not dominates(b, a)
     assert not dominates(a, a)
@@ -332,16 +369,16 @@ def test_pareto_dominates():
 
 def test_pareto_non_dominated():
     from autoresearch_skills.train import dominates
-    a = {"legible": 10, "pastel": 8, "linear": 10, "no_numbers": 10}
-    b = {"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10}
+    a = _make_frontier_entry(text_quality=40, color_palette=20)
+    b = _make_frontier_entry(text_quality=20, color_palette=40)
     assert not dominates(a, b)
     assert not dominates(b, a)
 
 
 def test_update_frontier_adds_non_dominated():
     from autoresearch_skills.train import update_frontier
-    frontier = [{"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "a", "total": 38}]
-    candidate = {"legible": 10, "pastel": 8, "linear": 10, "no_numbers": 10, "prompt": "b", "total": 38}
+    frontier = [_make_frontier_entry(text_quality=20, color_palette=40)]
+    candidate = _make_frontier_entry(text_quality=40, color_palette=20)
     new_frontier, added = update_frontier(frontier, candidate)
     assert added
     assert len(new_frontier) == 2
@@ -349,8 +386,8 @@ def test_update_frontier_adds_non_dominated():
 
 def test_update_frontier_rejects_dominated():
     from autoresearch_skills.train import update_frontier
-    frontier = [{"legible": 10, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "a", "total": 40}]
-    candidate = {"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "b", "total": 38}
+    frontier = [_make_frontier_entry(text_quality=50)]
+    candidate = _make_frontier_entry(text_quality=30)
     new_frontier, added = update_frontier(frontier, candidate)
     assert not added
     assert len(new_frontier) == 1
@@ -358,34 +395,38 @@ def test_update_frontier_rejects_dominated():
 
 def test_update_frontier_prunes_dominated():
     from autoresearch_skills.train import update_frontier
-    frontier = [{"legible": 8, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "a", "total": 38}]
-    candidate = {"legible": 10, "pastel": 10, "linear": 10, "no_numbers": 10, "prompt": "b", "total": 40}
+    frontier = [_make_frontier_entry(text_quality=30)]
+    candidate = _make_frontier_entry(text_quality=50)
     new_frontier, added = update_frontier(frontier, candidate)
     assert added
     assert len(new_frontier) == 1
-    assert new_frontier[0]["prompt"] == "b"
+    assert new_frontier[0]["text_quality"] == 50
 
+
+# ---------------------------------------------------------------------------
+# train.py: plateau detection
+# ---------------------------------------------------------------------------
 
 def test_detect_plateau_no_file(tmp_path):
-    from autoresearch_skills.train import detect_plateau, RESULTS_FILE
+    from autoresearch_skills.train import detect_plateau
     with patch("autoresearch_skills.train.RESULTS_FILE", tmp_path / "nonexistent.jsonl"):
-        assert not detect_plateau(38, window=3)
+        assert not detect_plateau(180, window=3)
 
 
 def test_detect_plateau_true(tmp_path):
     from autoresearch_skills.train import detect_plateau
     f = tmp_path / "results.jsonl"
-    f.write_text("\n".join(json.dumps({"score": 35}) for _ in range(3)) + "\n")
+    f.write_text("\n".join(json.dumps({"score": 150}) for _ in range(3)) + "\n")
     with patch("autoresearch_skills.train.RESULTS_FILE", f):
-        assert detect_plateau(38, window=3)
+        assert detect_plateau(180, window=3)
 
 
 def test_detect_plateau_false_when_improving(tmp_path):
     from autoresearch_skills.train import detect_plateau
     f = tmp_path / "results.jsonl"
-    f.write_text("\n".join(json.dumps({"score": s}) for s in [35, 37, 39]) + "\n")
+    f.write_text("\n".join(json.dumps({"score": s}) for s in [150, 170, 190]) + "\n")
     with patch("autoresearch_skills.train.RESULTS_FILE", f):
-        assert not detect_plateau(38, window=3)
+        assert not detect_plateau(180, window=3)
 
 
 # ---------------------------------------------------------------------------
