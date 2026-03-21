@@ -1,36 +1,30 @@
 #!/usr/bin/env python3
 """
-Autoresearch Dashboard -- Live visualization of Pareto frontier prompt optimization.
+Autoresearch Dashboard -- Live visualization of the autoresearch optimization.
 
 Reads results.jsonl and frontier.jsonl, serves a live-updating dashboard.
 
 Usage:
-    uv run python autoresearch_skills/dashboard.py
-    uv run python autoresearch_skills/dashboard.py --port 8501
+    uv run python -m autoresearch_skills.dashboard
+    uv run python -m autoresearch_skills.dashboard --port 8501
 """
 
 import json
 import os
 import sys
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-from pathlib import Path
 from urllib.parse import urlparse
 
-BASE_DIR = Path(__file__).resolve().parent / "data"
-RESULTS_FILE = BASE_DIR / "results.jsonl"
-STATE_FILE = BASE_DIR / "state.json"
-PROMPT_FILE = BASE_DIR / "prompt.txt"
-BEST_PROMPT_FILE = BASE_DIR / "best_prompt.txt"
-INITIAL_PROMPT_FILE = BASE_DIR / "initial_prompt.txt"
-FRONTIER_FILE = BASE_DIR / "frontier.jsonl"
-DIAGRAMS_DIR = BASE_DIR / "diagrams"
+from autoresearch_skills.prepare import (
+    INITIAL_PROMPT, RESULTS_FILE, BEST_PROMPT_FILE, FRONTIER_FILE,
+)
 
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Skills Autoresearch -- Pareto Frontier</title>
+<title>Skills Autoresearch Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -309,7 +303,7 @@ async function refresh() {
 
   // Subtitle
   document.getElementById('subtitle').textContent =
-    `Pareto frontier -- ${runs.length} runs -- best: ${typeof best === 'number' ? best.toFixed(2) : best}/10 -- last: ${formatTime(lastRun?.timestamp)}`;
+    `Progress -- ${runs.length} runs -- best: ${typeof best === 'number' ? best.toFixed(2) : best}/10 -- last: ${formatTime(lastRun?.timestamp)}`;
 }
 
 initCharts();
@@ -345,17 +339,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                         except json.JSONDecodeError:
                             pass
 
-            initial_prompt = ""
-            if INITIAL_PROMPT_FILE.exists():
-                initial_prompt = INITIAL_PROMPT_FILE.read_text().strip()
-
             best_prompt = ""
             if BEST_PROMPT_FILE.exists():
                 best_prompt = BEST_PROMPT_FILE.read_text().strip()
 
             data = {
                 "runs": runs,
-                "initial_prompt": initial_prompt,
+                "initial_prompt": INITIAL_PROMPT,
                 "best_prompt": best_prompt,
             }
             self.wfile.write(json.dumps(data).encode())

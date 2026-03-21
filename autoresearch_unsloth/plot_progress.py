@@ -3,9 +3,9 @@ Plot autoresearch-unsloth experiment progress from results_unsloth.tsv.
 Mirrors the style of the root autoresearch progress.png.
 
 Usage:
-    uv run autoresearch_unsloth/plot_progress.py
-    uv run autoresearch_unsloth/plot_progress.py --results path/to/results_unsloth.tsv
-    uv run autoresearch_unsloth/plot_progress.py --out autoresearch_unsloth/progress_unsloth.png
+    uv run python -m autoresearch_unsloth.plot_progress
+    uv run python -m autoresearch_unsloth.plot_progress --results path/to/results_unsloth.tsv
+    uv run python -m autoresearch_unsloth.plot_progress --out autoresearch_unsloth/progress_unsloth.png
 """
 
 import argparse

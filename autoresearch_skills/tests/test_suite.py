@@ -39,7 +39,7 @@ def test_syntax(filename):
 EXPECTED_IMPORTS = [
     "GEMINI_KEY", "ANTHROPIC_KEY",
     "GEN_MODEL", "EVAL_MODEL", "MUTATE_MODEL",
-    "BASE_DIR", "BEST_PROMPT_FILE", "RESULTS_FILE", "DIAGRAMS_DIR",
+    "BASE_DIR", "BEST_PROMPT_FILE", "INITIAL_PROMPT", "RESULTS_FILE", "FRONTIER_FILE", "DIAGRAMS_DIR",
     "BATCH_SIZE", "CYCLE_SECONDS", "MAX_GEN_WORKERS", "MAX_EVAL_WORKERS",
     "TOPICS",
     "evaluate_one", "score_batch",
@@ -66,11 +66,11 @@ def test_train_imports_resolve():
         assert name in exports, f"train.py imports '{name}' but prepare.py does not export it"
 
 
-def test_dashboard_is_self_contained():
+def test_dashboard_does_not_import_train():
     tree = ast.parse((SKILLS_DIR / "dashboard.py").read_text())
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in ("prepare", "train"):
-            pytest.fail(f"dashboard.py should not import from {node.module}")
+        if isinstance(node, ast.ImportFrom) and node.module and "train" in node.module:
+            pytest.fail("dashboard.py should not import from train")
 
 
 # ---------------------------------------------------------------------------
@@ -403,30 +403,56 @@ def test_update_frontier_prunes_dominated():
     assert new_frontier[0]["text_quality"] == 50
 
 
+def test_update_frontier_allows_same_scores_different_prompts():
+    from autoresearch_skills.train import update_frontier
+    frontier = [_make_frontier_entry(prompt="prompt A")]
+    candidate = _make_frontier_entry(prompt="prompt B")
+    new_frontier, added = update_frontier(frontier, candidate)
+    assert added
+    assert len(new_frontier) == 2
+
+
+def test_update_frontier_rejects_true_duplicate():
+    from autoresearch_skills.train import update_frontier
+    frontier = [_make_frontier_entry(prompt="same prompt")]
+    candidate = _make_frontier_entry(prompt="same prompt")
+    new_frontier, added = update_frontier(frontier, candidate)
+    assert not added
+    assert len(new_frontier) == 1
+
+
 # ---------------------------------------------------------------------------
 # train.py: plateau detection
 # ---------------------------------------------------------------------------
 
-def test_detect_plateau_no_file(tmp_path):
+def test_detect_plateau_no_streak():
     from autoresearch_skills.train import detect_plateau
-    with patch("autoresearch_skills.train.RESULTS_FILE", tmp_path / "nonexistent.jsonl"):
-        assert not detect_plateau(180, window=3)
+    state = {"best_score": 5.0, "run_number": 3, "plateau_streak": 0}
+    assert not detect_plateau(state, window=3)
 
 
-def test_detect_plateau_true(tmp_path):
+def test_detect_plateau_streak_below_window():
     from autoresearch_skills.train import detect_plateau
-    f = tmp_path / "results.jsonl"
-    f.write_text("\n".join(json.dumps({"score": 150}) for _ in range(3)) + "\n")
-    with patch("autoresearch_skills.train.RESULTS_FILE", f):
-        assert detect_plateau(180, window=3)
+    state = {"best_score": 5.0, "run_number": 5, "plateau_streak": 2}
+    assert not detect_plateau(state, window=3)
 
 
-def test_detect_plateau_false_when_improving(tmp_path):
+def test_detect_plateau_streak_at_window():
     from autoresearch_skills.train import detect_plateau
-    f = tmp_path / "results.jsonl"
-    f.write_text("\n".join(json.dumps({"score": s}) for s in [150, 170, 190]) + "\n")
-    with patch("autoresearch_skills.train.RESULTS_FILE", f):
-        assert not detect_plateau(180, window=3)
+    state = {"best_score": 5.0, "run_number": 6, "plateau_streak": 3}
+    assert detect_plateau(state, window=3)
+
+
+def test_detect_plateau_streak_above_window():
+    from autoresearch_skills.train import detect_plateau
+    state = {"best_score": 5.0, "run_number": 10, "plateau_streak": 7}
+    assert detect_plateau(state, window=3)
+
+
+def test_detect_plateau_missing_key():
+    from autoresearch_skills.train import detect_plateau
+    state = {"best_score": 5.0, "run_number": 3}
+    assert not detect_plateau(state, window=3)
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +473,7 @@ def test_program_md_references_correct_files():
 
 def test_program_md_has_key_sections():
     content = (SKILLS_DIR / "program.md").read_text()
-    for section in ["## Setup", "## Experimentation", "## The experiment loop", "## Eval Criteria"]:
+    for section in ["## Setup", "## Experimentation", "## Optimization Architecture", "## Eval Criteria"]:
         assert section in content, f"program.md missing section: {section}"
 
 
@@ -463,12 +489,12 @@ def test_no_old_skill_md():
     assert not (SKILLS_DIR / "SKILL.md").exists(), "SKILL.md should have been replaced by program.md"
 
 
-def test_data_dir_exists():
-    assert (SKILLS_DIR / "data").is_dir()
+def test_state_dir_exists():
+    assert (SKILLS_DIR / "state").is_dir()
 
 
-def test_data_files_present():
-    data = SKILLS_DIR / "data"
-    assert (data / "prompt.txt").exists()
-    assert (data / "state.json").exists()
-    assert (data / "results.jsonl").exists()
+def test_state_files_present():
+    state_dir = SKILLS_DIR / "state"
+    assert (state_dir / "prompt.txt").exists()
+    assert (state_dir / "state.json").exists()
+    assert (state_dir / "results.jsonl").exists()

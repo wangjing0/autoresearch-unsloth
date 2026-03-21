@@ -1,6 +1,6 @@
 """
 Autoresearch fine-tuning script using Unsloth + LoRA. Single-GPU, single-file.
-Usage: uv run autoresearch_unsloth/train_unsloth.py
+Usage: uv run python -m autoresearch_unsloth.train_unsloth
 """
 
 import math
@@ -9,8 +9,7 @@ import shutil
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(__file__))
-from prepare_unsloth import CACHE_DIR, DATASET_DIR, model_dir
+from autoresearch_unsloth.prepare_unsloth import CACHE_DIR, DATASET_DIR, model_dir
 
 import torch
 from datasets import load_from_disk

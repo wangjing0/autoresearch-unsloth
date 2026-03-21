@@ -4,7 +4,7 @@ Prepares the alpaca-cleaned fine-tuning dataset. Base models are downloaded
 on-demand by train_unsloth.py at the start of each run.
 
 Usage:
-    uv run autoresearch_unsloth/prepare_unsloth.py
+    uv run python -m autoresearch_unsloth.prepare_unsloth
 """
 
 import os

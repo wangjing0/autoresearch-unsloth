@@ -9,10 +9,10 @@ Selects parents from the frontier weighted toward the weakest dimension.
 The fixed evaluation harness lives in prepare.py (do not modify).
 
 Usage:
-    uv run python autoresearch_skills/train.py              # Continuous loop
-    uv run python autoresearch_skills/train.py --once       # Single cycle
-    uv run python autoresearch_skills/train.py --cycles 5   # Run N cycles
-    uv run python autoresearch_skills/train.py --reset      # Reset state
+    uv run python -m autoresearch_skills.train              # Continuous loop
+    uv run python -m autoresearch_skills.train --once       # Single cycle
+    uv run python -m autoresearch_skills.train --cycles 5   # Run N cycles
+    uv run python -m autoresearch_skills.train --reset      # Reset state
 """
 
 from __future__ import annotations
@@ -31,15 +31,26 @@ from pathlib import Path
 from autoresearch_skills.prepare import (
     GEMINI_KEY, ANTHROPIC_KEY,
     GEN_MODEL, EVAL_MODEL, MUTATE_MODEL,
-    BASE_DIR, BEST_PROMPT_FILE, INITIAL_PROMPT_FILE, RESULTS_FILE, DIAGRAMS_DIR,
+    BASE_DIR, PROMPT_FILE, BEST_PROMPT_FILE, INITIAL_PROMPT, RESULTS_FILE, FRONTIER_FILE, DIAGRAMS_DIR,
     BATCH_SIZE, CYCLE_SECONDS, MAX_GEN_WORKERS, MAX_EVAL_WORKERS,
-    TOPICS, CRITERIA, MAX_SCORE, PLATEAU_WINDOW,
+    TOPICS, CRITERIA, MAX_SCORE, PLATEAU_WINDOW, DEFAULT_CYCLES,
     evaluate_one, score_batch,
     load_state, save_state, load_prompt, save_prompt,
 )
 
-FRONTIER_FILE = BASE_DIR / "frontier.jsonl"
+
+# ===========================================================================
+#  AGENT STRATEGY ZONE -- the search space for prompt optimization
+#
+#  Everything below (until the SYSTEM INFRASTRUCTURE banner) is fair game
+#  for the agent to modify: hyperparameters, templates, selection heuristics,
+#  mutation logic, and adversarial topic generation.
+# ===========================================================================
+
+# ─── Hyperparameters ────────────────────────────────────────────────────────
+
 ADVERSARIAL_TOPIC_COUNT = 3
+MAX_FRONTIER_SIZE = 50
 
 CRITERIA_LABELS = {
     "text_quality": "Text Quality",
@@ -50,79 +61,7 @@ CRITERIA_LABELS = {
     "icon_quality": "Icon Quality",
 }
 
-# ─── Pareto Frontier ─────────────────────────────────────────────────────────
-
-
-def dominates(a: dict, b: dict) -> bool:
-    """True if a is strictly better on at least one criterion and no worse on all."""
-    dominated_one = False
-    for c in CRITERIA:
-        if a.get(c, 0) < b.get(c, 0):
-            return False
-        if a.get(c, 0) > b.get(c, 0):
-            dominated_one = True
-    return dominated_one
-
-
-def _score_vector(entry: dict) -> tuple:
-    """Extract the score vector as a hashable tuple for dedup."""
-    return tuple(entry.get(c, 0) for c in CRITERIA)
-
-
-def update_frontier(frontier: list[dict], candidate: dict) -> tuple[list[dict], bool]:
-    """Add candidate if non-dominated and not a duplicate. Prune dominated members."""
-    candidate_vec = _score_vector(candidate)
-    for member in frontier:
-        if dominates(member, candidate):
-            return frontier, False
-        if _score_vector(member) == candidate_vec:
-            return frontier, False
-    pruned = [m for m in frontier if not dominates(candidate, m)]
-    pruned.append(candidate)
-    return pruned, True
-
-
-def load_frontier() -> list[dict]:
-    if not FRONTIER_FILE.exists():
-        return []
-    entries = []
-    for line in FRONTIER_FILE.read_text().strip().split("\n"):
-        if line.strip():
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return entries
-
-
-def save_frontier(frontier: list[dict]):
-    FRONTIER_FILE.write_text("\n".join(json.dumps(e) for e in frontier) + "\n")
-
-
-def find_weakest_criterion(frontier: list[dict]) -> str:
-    """Identify which criterion has the lowest max score across the frontier."""
-    if not frontier:
-        return "text_quality"
-    best_per = {c: max(m.get(c, 0) for m in frontier) for c in CRITERIA}
-    return min(best_per, key=best_per.get)
-
-
-def select_parent(frontier: list[dict], weakest: str) -> dict:
-    """Select a frontier member, weighted toward those strong on the weakest criterion."""
-    if not frontier:
-        return None
-    weights = [m.get(weakest, 0) + 1 for m in frontier]
-    total = sum(weights)
-    r = random.random() * total
-    cumulative = 0
-    for m, w in zip(frontier, weights):
-        cumulative += w
-        if r <= cumulative:
-            return m
-    return frontier[-1]
-
-
-# ─── Adversarial Topic Generation ────────────────────────────────────────────
+# ─── Adversarial Topic Generation ──────────────────────────────────────────
 
 TOPIC_GEN_TEMPLATE = """Generate {count} novel technical diagram topics that would stress-test the "{criterion}" criterion in AI-generated diagrams.
 
@@ -178,7 +117,7 @@ def generate_adversarial_topics(anthropic_client, weakest: str, count: int = ADV
         return []
 
 
-# ─── Mutation Templates ──────────────────────────────────────────────────────
+# ─── Mutation Templates ────────────────────────────────────────────────────
 
 REFINE_TEMPLATE = """You are optimizing a text-to-image prompt for generating technical diagrams. The prompt is sent to Gemini's image generation model. Diagrams are scored on 6 criteria, each normalized to 0-10. Overall score is the mean of all 6, max 10.00.
 
@@ -257,59 +196,43 @@ Require simple line-art icons in EVERY box. Icons must be relevant to the concep
 Consistent icon style (all outline, all same stroke width). Ban empty boxes.""",
 }
 
-# ─── Plateau Detection ───────────────────────────────────────────────────────
+# ─── Selection & Plateau Heuristics ────────────────────────────────────────
 
 
-def detect_plateau(best_score: float, window: int = PLATEAU_WINDOW) -> bool:
-    """True if the best score across the last `window` runs equals the all-time best.
+def detect_plateau(state: dict, window: int = PLATEAU_WINDOW) -> bool:
+    """True if the last `window` consecutive cycles failed to set a new best.
 
-    The old check (all recent <= best) was nearly always true since individual
-    run scores rarely exceed the historical best. Instead, we check whether
-    the *maximum* score within the window failed to set a new record -- i.e.,
-    the best hasn't actually improved during the window.
+    Uses a streak counter in state rather than re-parsing results. The counter
+    is incremented after each cycle that doesn't beat the all-time best, and
+    reset to 0 whenever a new best is set.
     """
-    if not RESULTS_FILE.exists():
-        return False
-    lines = RESULTS_FILE.read_text().strip().split("\n")
-    if len(lines) < window:
-        return False
-    recent_best = -1.0
-    for line in lines[-window:]:
-        try:
-            recent_best = max(recent_best, json.loads(line)["score"])
-        except (json.JSONDecodeError, KeyError):
-            return False
-    return recent_best <= best_score and best_score > -1
+    return state.get("plateau_streak", 0) >= window
 
 
-# ─── Generation (Gemini) ─────────────────────────────────────────────────────
+def find_weakest_criterion(frontier: list[dict]) -> str:
+    """Identify which criterion has the lowest max score across the frontier."""
+    if not frontier:
+        return "text_quality"
+    best_per = {c: max(m.get(c, 0) for m in frontier) for c in CRITERIA}
+    return min(best_per, key=best_per.get)
 
 
-def generate_one(gemini_client, prompt: str, topic: str, output_path: Path) -> bool:
-    """Generate a single diagram via Gemini image generation."""
-    from google.genai import types
-
-    full_prompt = f"{prompt}\n\nDiagram to create: {topic}"
-    try:
-        response = gemini_client.models.generate_content(
-            model=GEN_MODEL,
-            contents=full_prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE", "TEXT"],
-            ),
-        )
-        for part in response.candidates[0].content.parts:
-            if part.inline_data:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_bytes(part.inline_data.data)
-                return True
-        return False
-    except Exception as e:
-        print(f"    GEN ERROR: {e}")
-        return False
+def select_parent(frontier: list[dict], weakest: str) -> dict:
+    """Select a frontier member, weighted toward those strong on the weakest criterion."""
+    if not frontier:
+        return None
+    weights = [m.get(weakest, 0) + 1 for m in frontier]
+    total = sum(weights)
+    r = random.random() * total
+    cumulative = 0
+    for m, w in zip(frontier, weights):
+        cumulative += w
+        if r <= cumulative:
+            return m
+    return frontier[-1]
 
 
-# ─── Mutation (Claude) ───────────────────────────────────────────────────────
+# ─── Mutation Logic ────────────────────────────────────────────────────────
 
 
 def _collect_failures(eval_results: list[dict]) -> str:
@@ -378,7 +301,107 @@ def mutate_prompt(
     return response.content[0].text.strip()
 
 
-# ─── Main Cycle ──────────────────────────────────────────────────────────────
+# ===========================================================================
+#  SYSTEM INFRASTRUCTURE -- do not modify during optimization runs
+#
+#  Pareto frontier mechanics, image generation, cycle orchestration, and
+#  the entry point. Changes here affect the optimization loop itself, not
+#  the search strategy.
+# ===========================================================================
+
+# ─── Pareto Frontier ───────────────────────────────────────────────────────
+
+
+def dominates(a: dict, b: dict) -> bool:
+    """True if a is strictly better on at least one criterion and no worse on all."""
+    dominated_one = False
+    for c in CRITERIA:
+        if a.get(c, 0) < b.get(c, 0):
+            return False
+        if a.get(c, 0) > b.get(c, 0):
+            dominated_one = True
+    return dominated_one
+
+
+def _score_vector(entry: dict) -> tuple:
+    """Extract the score vector as a hashable tuple for dedup."""
+    return tuple(entry.get(c, 0) for c in CRITERIA)
+
+
+def _prompt_fingerprint(entry: dict) -> str:
+    """Short fingerprint for dedup -- first 200 chars of prompt text."""
+    return entry.get("prompt", "")[:200]
+
+
+def update_frontier(frontier: list[dict], candidate: dict) -> tuple[list[dict], bool]:
+    """Add candidate if non-dominated. Prune dominated members.
+
+    Two entries with identical score vectors are allowed if their prompts
+    differ (preserves strategy diversity). True duplicates (same scores AND
+    same prompt fingerprint) are rejected.
+    """
+    candidate_vec = _score_vector(candidate)
+    candidate_fp = _prompt_fingerprint(candidate)
+    for member in frontier:
+        if dominates(member, candidate):
+            return frontier, False
+        if _score_vector(member) == candidate_vec and _prompt_fingerprint(member) == candidate_fp:
+            return frontier, False
+    pruned = [m for m in frontier if not dominates(candidate, m)]
+    pruned.append(candidate)
+    if len(pruned) > MAX_FRONTIER_SIZE:
+        pruned.sort(key=lambda m: m.get("overall", 0))
+        pruned = pruned[-MAX_FRONTIER_SIZE:]
+    return pruned, True
+
+
+def load_frontier() -> list[dict]:
+    if not FRONTIER_FILE.exists():
+        return []
+    entries = []
+    for line in FRONTIER_FILE.read_text().strip().split("\n"):
+        if line.strip():
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return entries
+
+
+def save_frontier(frontier: list[dict]):
+    tmp = FRONTIER_FILE.with_suffix(".jsonl.tmp")
+    tmp.write_text("\n".join(json.dumps(e) for e in frontier) + "\n")
+    tmp.replace(FRONTIER_FILE)
+
+
+# ─── Generation (Gemini) ──────────────────────────────────────────────────
+
+
+def generate_one(gemini_client, prompt: str, topic: str, output_path: Path) -> bool:
+    """Generate a single diagram via Gemini image generation."""
+    from google.genai import types
+
+    full_prompt = f"{prompt}\n\nDiagram to create: {topic}"
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEN_MODEL,
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+            ),
+        )
+        for part in response.candidates[0].content.parts:
+            if part.inline_data:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(part.inline_data.data)
+                return True
+        return False
+    except Exception as e:
+        print(f"    GEN ERROR: {e}")
+        return False
+
+
+# ─── Main Cycle ────────────────────────────────────────────────────────────
 
 
 def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
@@ -390,11 +413,11 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
 
     frontier = load_frontier()
     weakest = find_weakest_criterion(frontier)
-    is_plateau = detect_plateau(state["best_score"])
+    is_plateau = detect_plateau(state)
     mode = "EXPLORE" if is_plateau else "REFINE"
 
-    if run_num == 1 and INITIAL_PROMPT_FILE.exists():
-        prompt = INITIAL_PROMPT_FILE.read_text().strip()
+    if run_num == 1:
+        prompt = INITIAL_PROMPT
         print("  Using initial seed prompt for baseline eval")
     else:
         parent = select_parent(frontier, weakest) if frontier else None
@@ -471,8 +494,13 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
                 fails = result.get("failures", [])
                 print(f"    [{i+1}] avg {diag_avg:.1f}/5 | {'; '.join(fails[:2]) if fails else 'no issues'}")
             else:
-                eval_results.append({c: 1 for c in CRITERIA} | {"failures": ["eval_error"]})
-                print(f"    [{i+1}] avg 1.0/5 | eval failed")
+                print(f"    [{i+1}] SKIPPED (eval failed -- not counted in scores)")
+
+    if not eval_results:
+        print("  ERROR: All evaluations failed. Skipping cycle.")
+        state["plateau_streak"] = state.get("plateau_streak", 0) + 1
+        save_state(state)
+        return state
 
     # ── Score ─────────────────────────────────────────────────────
     scores = score_batch(eval_results)
@@ -515,8 +543,11 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     # ── Also track simple best ────────────────────────────────────
     if overall > state["best_score"]:
         state["best_score"] = overall
+        state["plateau_streak"] = 0
         BEST_PROMPT_FILE.write_text(prompt)
         print(f"  NEW BEST! {overall}/{MAX_SCORE}")
+    else:
+        state["plateau_streak"] = state.get("plateau_streak", 0) + 1
 
     # ── Mutate ────────────────────────────────────────────────────
     if overall < MAX_SCORE:
@@ -541,7 +572,7 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     return state
 
 
-# ─── Entry Point ──────────────────────────────────────────────────────────────
+# ─── Entry Point ───────────────────────────────────────────────────────────
 
 
 def main():
@@ -554,14 +585,15 @@ def main():
     if args.reset:
         import shutil
         RESULTS_FILE.write_text("")
-        save_state({"best_score": -1, "run_number": 0})
+        save_state({"best_score": -1, "run_number": 0, "plateau_streak": 0})
         FRONTIER_FILE.unlink(missing_ok=True)
         BEST_PROMPT_FILE.unlink(missing_ok=True)
+        PROMPT_FILE.unlink(missing_ok=True)
         diagrams = DIAGRAMS_DIR
         if diagrams.exists():
             shutil.rmtree(diagrams)
             diagrams.mkdir(parents=True)
-        print("Reset: cleared results, state, frontier, best_prompt, and diagrams. New run will start from scratch.")
+        print("Reset: cleared results, state, frontier, prompt, best_prompt, and output files. New run will start from scratch.")
 
     if not GEMINI_KEY:
         print("ERROR: GOOGLE_API_KEY not set", file=sys.stderr)
@@ -580,20 +612,20 @@ def main():
     anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     state = load_state()
 
-    print("Diagram Autoresearch Pareto Frontier Optimization")
+    print("Autoresearch Pareto Frontier Optimization")
     print(f"  Gen model:    {GEN_MODEL}")
     print(f"  Eval model:   {EVAL_MODEL}")
     print(f"  Mutate model: {MUTATE_MODEL}")
     print(f"  Batch size:   {BATCH_SIZE}")
     print(f"  Max score:    {MAX_SCORE} (mean of 6 criteria, each 0-10)")
-    print(f"  State:        run {state['run_number']}, best {state['best_score']}/{MAX_SCORE}")
+    print(f"  State:        run {state['run_number']}, best {state['best_score']}/{MAX_SCORE}, plateau streak {state.get('plateau_streak', 0)}")
     print(f"  Frontier:     {len(load_frontier())} members")
 
     if args.once:
         run_cycle(gemini_client, anthropic_client, state)
         return
 
-    max_cycles = args.cycles or float("inf")
+    max_cycles = args.cycles or DEFAULT_CYCLES
     i = 0
     while i < max_cycles:
         start = time.time()

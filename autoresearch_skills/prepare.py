@@ -28,12 +28,12 @@ GEN_MODEL = "gemini-2.5-flash-image"
 EVAL_MODEL = "claude-sonnet-4-6"
 MUTATE_MODEL = "claude-sonnet-4-6"
 
-BASE_DIR = Path(__file__).resolve().parent / "data"
+BASE_DIR = Path(__file__).resolve().parent / "state"
 PROMPT_FILE = BASE_DIR / "prompt.txt"
 BEST_PROMPT_FILE = BASE_DIR / "best_prompt.txt"
-INITIAL_PROMPT_FILE = BASE_DIR / "initial_prompt.txt"
 STATE_FILE = BASE_DIR / "state.json"
 RESULTS_FILE = BASE_DIR / "results.jsonl"
+FRONTIER_FILE = BASE_DIR / "frontier.jsonl"
 DIAGRAMS_DIR = BASE_DIR / "diagrams"
 
 BATCH_SIZE = 10
@@ -41,6 +41,18 @@ CYCLE_SECONDS = 120
 MAX_GEN_WORKERS = 3
 MAX_EVAL_WORKERS = 5
 PLATEAU_WINDOW = 3
+DEFAULT_CYCLES = 10
+
+INITIAL_PROMPT = (
+    "Create a clean, hand-drawn style diagram on a white background. "
+    "Use soft pastel colored rounded rectangles (light purple, light blue, "
+    "light green, light pink, light yellow, light teal) for each concept. "
+    "Include simple line-art icons inside each box. Use thin black arrows "
+    "to show relationships. Text labels should be clean, dark, and easy to "
+    "read. Style should look like a whiteboard sketch or notebook illustration "
+    "-- professional but approachable. No photorealistic elements. No gradients. "
+    "Keep it minimal and clear."
+)
 
 # ─── Diagram Topics (diverse structures) ─────────────────────────────────────
 

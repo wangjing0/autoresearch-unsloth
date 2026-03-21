@@ -11,8 +11,8 @@ for a fixed 5-minute budget, checks if `val_bpb` , aka model-agnostic perplexity
 
 ```bash
 uv sync
-uv run autoresearch/prepare.py        # one-time: download data, train tokenizer (~2 min)
-uv run autoresearch/train.py          # verify setup (~5 min)
+uv run python -m autoresearch.prepare        # one-time: download data, train tokenizer (~2 min)
+uv run python -m autoresearch.train          # verify setup (~5 min)
 ```
 
 **Requirements:** Single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
@@ -25,8 +25,8 @@ checks if `eval_loss`, or your custom defined metric on the evaluation set, has 
 
 ```bash
 uv sync --extra unsloth
-uv run autoresearch_unsloth/prepare_unsloth.py   # one-time: download dataset (~1 min)
-uv run autoresearch_unsloth/train_unsloth.py     # verify setup; downloads model on first run if not already cached
+uv run python -m autoresearch_unsloth.prepare_unsloth   # one-time: download dataset (~1 min)
+uv run python -m autoresearch_unsloth.train_unsloth     # verify setup; downloads model on first run if not already cached
 ```
 
 **Requirements:** Single NVIDIA GPU, Python 3.10+, [uv](https://docs.astral.sh/uv/).
@@ -38,18 +38,16 @@ Models are cached under
 
 ## autoresearch-skills (Skills prompt optimization)
 
-An agent edits `train.py` to optimize text-to-image prompts for generating technical diagrams.
-The system generates diagrams via Gemini, evaluates them with Claude vision on 6 graded criteria
+An agent edits `train.py` to optimize text-to-image prompts for generating images according to a set of criteria. The system generates images via Gemini, evaluates them with Claude vision on 6 graded criteria
 (text quality, color palette, layout, label discipline, visual clarity, icon quality), and uses
 Pareto frontier optimization to maintain a diverse set of non-dominated prompts. The human
-defines evaluation criteria in `prepare.py`; the agent searches for the best prompt strategies
-in `train.py`.
+defines evaluation criteria and the initial seed prompt in `prepare.py`; the agent searches for the best prompt strategies in `train.py` and runs the optimization loop.
 
 ```bash
 uv sync
 # set GOOGLE_API_KEY and ANTHROPIC_API_KEY in .env
-uv run python autoresearch_skills/train.py 
-uv run python autoresearch_skills/dashboard.py        # live dashboard at localhost:8501
+uv run python -m autoresearch_skills.train              # continuous optimization loop
+uv run python -m autoresearch_skills.dashboard          # live dashboard at localhost:8501
 ```
 
 **Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), Google API key (Gemini), Anthropic API key (Claude). No GPU required.
@@ -77,14 +75,15 @@ Have a look at autoresearch_skills/program.md and let's kick off a new experimen
 ## Visualizing progress
 
 ```bash
-uv run autoresearch_unsloth/plot_progress.py          # output progress_unsloth.png
-uv run python autoresearch_skills/dashboard.py        # live web dashboard at localhost:8501
+uv run python -m autoresearch_unsloth.plot_progress    # output progress_unsloth.png
+uv run python -m autoresearch_skills.dashboard          # live web dashboard at localhost:8501
 ```
 
 ## References
 
 - [karpathy/autoresearch](https://github.com/karpathy/autoresearch) (original)
 - [unslothai/unsloth](https://docs.unsloth.ai/get-started/unsloth-notebooks)
+- [pareto-front-search](https://en.wikipedia.org/wiki/Pareto_front )
 
 ## License
 

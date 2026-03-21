@@ -16,16 +16,18 @@ the eval prompt that judges generated diagrams. These are fixed before the agent
 and do not change during a run.
 
 - **EVAL_PROMPT** in `prepare.py` -- the exact prompt sent to Claude vision to judge each
-  diagram. Defines 4 binary pass/fail criteria: legible text, pastel colors, linear layout,
-  no numbers. This is the ground truth. The agent never sees or modifies it.
+  diagram. Defines 6 graded criteria (text quality, color palette, layout, label discipline,
+  visual clarity, icon quality) scored 1-5 each. This is the ground truth. The agent never
+  sees or modifies it.
 - **TOPICS** in `prepare.py` -- the base set of 30 diagram topics used for generation.
   These define the diversity of test cases the system evaluates against.
 - **evaluate_one()** and **score_batch()** in `prepare.py` -- the evaluation harness that
   calls Claude vision and computes scores. The scoring logic is fixed.
 - **Constants** in `prepare.py` -- models (GEN_MODEL, EVAL_MODEL, MUTATE_MODEL), batch size,
   cycle timing, worker counts. These set the operational constraints.
-- **data/prompt.txt** -- the initial seed prompt that tells Gemini how to generate images.
-  The human writes the starting point; the agent evolves it from there.
+- **INITIAL_PROMPT** in `prepare.py` -- the initial seed prompt that tells Gemini how to generate
+  diagrams. Used as baseline on run 1. The human defines the starting point; the agent evolves
+  it from there. The current working prompt is stored in `state/prompt.txt`.
 
 If you want to change what the system optimizes for (different criteria, different generation
 style, different scoring), you modify `prepare.py` and provide a new seed prompt. Then
@@ -67,9 +69,9 @@ To set up a new experiment, work with the user to:
    - `autoresearch_skills/program.md` -- this file. Read it fully before starting.
 4. **Verify environment**: Check that `.env` contains `GOOGLE_API_KEY` and `ANTHROPIC_API_KEY`.
    If not, tell the human to set them up.
-5. **Verify data dir**: Check that `autoresearch_skills/data/prompt.txt` exists with a seed prompt.
-   `data/initial_prompt.txt` stores the original seed for dashboard comparison.
-   If starting fresh, the human should provide one.
+5. **Verify state dir**: Check that `autoresearch_skills/state/prompt.txt` exists with a seed prompt.
+   The initial seed prompt is defined as `INITIAL_PROMPT` in `prepare.py`.
+   If starting fresh, the human should provide one in `state/prompt.txt`.
 6. **Initialize**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
@@ -81,7 +83,7 @@ prompt (Gemini image gen), evaluates each against 4 criteria via Claude vision, 
 Pareto frontier, then mutates the prompt for the next cycle. You launch it as:
 
 ```
-uv run python autoresearch_skills/train.py > run.log 2>&1
+uv run python -m autoresearch_skills.train > run.log 2>&1
 ```
 
 **What you CAN do:**
@@ -98,8 +100,8 @@ uv run python autoresearch_skills/train.py > run.log 2>&1
 - Modify the evaluation criteria. The `EVAL_PROMPT` and `evaluate_one` function in `prepare.py`
   are the ground truth metric.
 
-**The goal is simple: get the highest score out of 40.** Each batch of 10 diagrams is scored on
-4 binary criteria (legible text, pastel colors, linear layout, no numbers), for a maximum of 40.
+**The goal is simple: get the highest overall score out of 10.00.** Each diagram is scored on
+6 graded criteria (1-5 each), normalized to 0-10 per criterion. Overall = mean of all 6.
 
 **The search space** -- parameters to explore in `train.py`:
 
@@ -126,10 +128,10 @@ default parameters as-is.
 
 ## Optimization Architecture
 
-The system uses **Pareto frontier optimization** across 4 criteria instead of greedy
+The system uses **Pareto frontier optimization** across 6 graded criteria instead of greedy
 hill-climbing on a single scalar score.
 
-**Pareto frontier** (`data/frontier.jsonl`): Non-dominated prompts. Prompt A dominates B if A is
+**Pareto frontier** (`state/frontier.jsonl`): Non-dominated prompts. Prompt A dominates B if A is
 better on at least one criterion and no worse on all others. Maintains diversity -- prompts with
 different trade-offs coexist.
 
@@ -153,24 +155,26 @@ switches from REFINE to EXPLORE mode for radical prompt restructuring.
 Each cycle prints:
 
 ```
-RUN 7 | 15:33:08 | Best: 38/40 | Mode: EXPLORE | Weakest: legible
+RUN 7 | 15:33:08 | Best: 7.50/10 | Mode: EXPLORE | Weakest: text_quality
   Frontier size: 3 | Adversarial topics: 3
 
-  SCORE: 36/40
-    Legible:    6/10
-    Pastel:     10/10
-    Linear:     10/10
-    No numbers: 10/10
+  SCORE: 6.83/10
+    Text Quality         5.00/10
+    Color Palette        8.75/10
+    Layout               7.50/10
+    Label Discipline     6.25/10
+    Visual Clarity       7.50/10
+    Icon Quality         6.00/10
 
   FRONTIER: Added (frontier size: 4)
-  Bottleneck: legible
+  Bottleneck: text_quality
   Mutating prompt (EXPLORE mode)...
 ```
 
 Extract key metrics:
 
 ```
-grep "SCORE:\|FRONTIER:\|Mode:\|Early stopping" run.log
+grep "SCORE:\|FRONTIER:\|Mode:" run.log
 ```
 
 ## Dashboard
@@ -178,7 +182,7 @@ grep "SCORE:\|FRONTIER:\|Mode:\|Early stopping" run.log
 Start the live dashboard to monitor progress:
 
 ```
-uv run python autoresearch_skills/dashboard.py --port 8501
+uv run python -m autoresearch_skills.dashboard --port 8501
 ```
 
 The dashboard shows: best score, baseline, improvement percentage, frontier size, current
@@ -192,7 +196,7 @@ switches to EXPLORE mode after PLATEAU_WINDOW (default 3) consecutive runs witho
 improvement. The agent should interpret persistent plateaus as a signal to change strategy
 in `train.py` before restarting.
 
-**Reset**: To start fresh, run `uv run python autoresearch_skills/train.py --reset`. This clears
+**Reset**: To start fresh, run `uv run python -m autoresearch_skills.train --reset`. This clears
 results, state, frontier, best_prompt, and output files while preserving the seed prompt.
 
 **Timeout**: Each cycle typically finishes in ~2 minutes. If a run exceeds 5 minutes, kill it
@@ -210,18 +214,21 @@ interrupts you.
 
 ## Eval Criteria (fixed in prepare.py -- human-defined)
 
-Each diagram is evaluated on 4 binary pass/fail criteria. These are written by the human
+Each diagram is evaluated on 6 graded criteria (1-5 scale). These are written by the human
 in `EVAL_PROMPT` inside `prepare.py` and cannot be changed by the agent:
 
-1. **Legible & grammatical** -- all text readable, correctly spelled, grammatically correct
-2. **Pastel colors** -- soft pastel fills only, no saturated/dark colors
-3. **Linear layout** -- strictly left-to-right or top-to-bottom flow
-4. **No numbers** -- zero digits, ordinals, or step numbers anywhere
+1. **Text Quality** (1-5) -- legibility, spelling, spacing, consistent sizing
+2. **Color Palette** (1-5) -- harmonious soft pastel colors with deliberate color coding
+3. **Layout** (1-5) -- linear flow with uniform spacing and clean arrows
+4. **Label Discipline** (1-5) -- concise 2-4 word labels, no numbers/ordinals, consistent style
+5. **Visual Clarity** (1-5) -- publication-quality composition, consistent styling, good whitespace
+6. **Icon Quality** (1-5) -- clear, relevant, consistently styled line-art icons in every box
 
-Score = sum of passes across 10 diagrams x 4 criteria = max 40.
+Each criterion's raw average (1-5) is mapped to 0-10 via `(avg - 1) / 4 * 10`.
+Overall score = mean of all 6 normalized scores, max 10.00.
 
 To change what the system optimizes for, the human modifies `EVAL_PROMPT` and the criteria
-in `prepare.py`, provides a new seed prompt in `data/prompt.txt`, resets with `--reset`,
+in `prepare.py`, provides a new seed prompt in `state/prompt.txt`, resets with `--reset`,
 and lets the agent run again.
 
 ## Models
