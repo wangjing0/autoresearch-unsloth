@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Diagram Autoresearch -- Pareto frontier prompt optimization.
+Diagram Autoresearch -- Pareto front prompt optimization.
 
-Maintains a Pareto frontier of non-dominated prompts across 6 graded criteria.
+Maintains a Pareto front of non-dominated prompts across 6 graded criteria.
 Uses LLM-generated adversarial topics to stress-test weak criteria.
-Selects parents from the frontier weighted toward the weakest dimension.
+Selects parents from the front weighted toward the weakest dimension.
 
 The fixed evaluation harness lives in prepare.py (do not modify).
 

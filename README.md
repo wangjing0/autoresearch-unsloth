@@ -1,13 +1,14 @@
 # autoresearch
 
-Autonomous LLM research loops — give an AI agent a training setup and let it explore the hyperparameter space.
-This repo contains three independent modules, each a self-contained autonomous search loop.
+Autonomous LLM research loops -- give an AI agent a training setup and let it explore the hyperparameter space. The repo contains three independent modules that each follow the same pattern: an agent edits a training script, runs an experiment under a fixed budget, evaluates the result against a target metric, and repeats.
 
-## autoresearch (Karpathy's original autoresearch framework)
+All three modules share the same prerequisites: [uv](https://docs.astral.sh/uv/). GPU and API key requirements vary by module.
 
-An agent edits `train.py` to modify GPT architecture and hyperparameters, trains
-for a fixed 5-minute budget, checks if `val_bpb` , aka model-agnostic perplexity, has improved, and repeats. See
-[`autoresearch/README.md`](autoresearch/README.md) for full details.
+## Modules
+
+### autoresearch -- GPT architecture search
+
+Based on [Karpathy's original framework](https://github.com/karpathy/autoresearch). The agent modifies GPT architecture and hyperparameters in `train.py`, trains for a fixed 5-minute budget, and checks whether `val_bpb` (model-agnostic perplexity) has improved. See [`autoresearch/README.md`](autoresearch/README.md) for full details.
 
 ```bash
 uv sync
@@ -15,33 +16,23 @@ uv run python -m autoresearch.prepare        # one-time: download data, train to
 uv run python -m autoresearch.train          # verify setup (~5 min)
 ```
 
-**Requirements:** Single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+Requires a single NVIDIA GPU (tested on H100).
 
-## autoresearch-unsloth (LoRA hyperparameter search)
+### autoresearch-unsloth -- LoRA hyperparameter search
 
-An agent edits the hyperparameters section of `train_unsloth.py` — LoRA rank, learning rate, base model,
-scheduler, and more — trains for 200 gradient steps on the designed benchmark task,
-checks if `eval_loss`, or your custom defined metric on the evaluation set, has improved, and repeats.
+The agent edits the hyperparameters section of `train_unsloth.py` -- LoRA rank, learning rate, base model, scheduler, and more -- then trains for 200 gradient steps and checks whether `eval_loss` (or a custom metric) has improved.
 
 ```bash
 uv sync --extra unsloth
 uv run python -m autoresearch_unsloth.prepare_unsloth   # one-time: download dataset (~1 min)
-uv run python -m autoresearch_unsloth.train_unsloth     # verify setup; downloads model on first run if not already cached
+uv run python -m autoresearch_unsloth.train_unsloth     # verify setup; downloads model on first run
 ```
 
-**Requirements:** Single NVIDIA GPU, Python 3.10+, [uv](https://docs.astral.sh/uv/).
+Requires a single NVIDIA GPU. Base models are downloaded automatically on first use and cached under `~/.cache/autoresearch_unsloth/models/<model-slug>/`. Set `HF_TOKEN` for gated models.
 
-Base models are downloaded automatically on first use by `train_unsloth.py`, provided
-enough disk space and VRAM are available. The download respects the `HF_TOKEN` environment variable for gated models.
-Models are cached under
-`~/.cache/autoresearch_unsloth/models/<model-slug>/`.
+### autoresearch-skills -- prompt optimization
 
-## autoresearch-skills (Skills prompt optimization)
-
-An agent edits `train.py` to optimize text-to-image prompts for generating images according to a set of criteria. The system generates images via Gemini, evaluates them with Claude vision on 6 graded criteria
-(text quality, color palette, layout, label discipline, visual clarity, icon quality), and uses
-Pareto frontier optimization to maintain a diverse set of non-dominated prompts. The human
-defines evaluation criteria and the initial seed prompt in `prepare.py`; the agent searches for the best prompt strategies in `train.py` and runs the optimization loop.
+The agent optimizes text-to-image prompts in `train.py` for generating images that satisfy a set of graded criteria. Images are generated via Gemini and evaluated by Claude vision on 6 dimensions (text quality, color palette, layout, label discipline, visual clarity, icon quality). The search uses Pareto front optimization to maintain a diverse set of non-dominated prompts, with two mutation modes -- REFINE for incremental improvement and EXPLORE for radical restructuring when a plateau is detected. See [`autoresearch_skills/program.md`](autoresearch_skills/program.md) for full details.
 
 ```bash
 uv sync
@@ -50,32 +41,21 @@ uv run python -m autoresearch_skills.train              # continuous optimizatio
 uv run python -m autoresearch_skills.dashboard          # live dashboard at localhost:8501
 ```
 
-**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), Google API key (Gemini), Anthropic API key (Claude). No GPU required.
-
-The optimization uses Pareto frontier search across 6 criteria (each scored 0-10, overall 0-10)
-with duplicate-free frontier management. Each cycle samples a deterministic set of standard topics
-(seeded by run number for reproducible cross-run comparisons) plus LLM-generated adversarial topics
-that stress-test the weakest criterion. Mutations operate on the selected frontier parent rather
-than always falling back to the global best, and two mutation modes (REFINE for incremental
-improvement, EXPLORE for radical restructuring when plateau detection triggers) drive the search.
-See [`autoresearch_skills/program.md`](autoresearch_skills/program.md) for full details.
+No GPU required. Needs a Google API key (Gemini) and an Anthropic API key (Claude).
 
 ## Running the agent
 
-For any module, spin up Claude Code (or any coding agent), then prompt:
+For any module, open Claude Code (or any coding agent) and prompt:
 
 ```
 Have a look at autoresearch/program.md and let's kick off a new experiment.
-# or
-Have a look at autoresearch_unsloth/program_unsloth.md and let's kick off a new experiment.
-# or
-Have a look at autoresearch_skills/program.md and let's kick off a new experiment.
 ```
+
 
 ## Visualizing progress
 
 ```bash
-uv run python -m autoresearch_unsloth.plot_progress    # output progress_unsloth.png
+uv run python -m autoresearch_unsloth.plot_progress    # outputs progress_unsloth.png
 uv run python -m autoresearch_skills.dashboard          # live web dashboard at localhost:8501
 ```
 
@@ -83,7 +63,7 @@ uv run python -m autoresearch_skills.dashboard          # live web dashboard at 
 
 - [karpathy/autoresearch](https://github.com/karpathy/autoresearch) (original)
 - [unslothai/unsloth](https://docs.unsloth.ai/get-started/unsloth-notebooks)
-- [pareto-front-search](https://en.wikipedia.org/wiki/Pareto_front )
+- [Pareto front](https://en.wikipedia.org/wiki/Pareto_front)
 
 ## License
 
