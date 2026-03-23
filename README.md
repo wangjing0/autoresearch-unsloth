@@ -32,7 +32,7 @@ Requires a single NVIDIA GPU. Base models are downloaded automatically on first 
 
 ### autoresearch-skills -- prompt optimization
 
-The agent optimizes text-to-image prompts in `train.py` for generating images that satisfy a set of graded criteria. Images are generated via Gemini and evaluated by Claude vision on 6 dimensions (text quality, color palette, layout, label discipline, visual clarity, icon quality). The search uses Pareto front optimization to maintain a diverse set of non-dominated prompts, with two mutation modes -- REFINE for incremental improvement and EXPLORE for radical restructuring when a plateau is detected. See [`autoresearch_skills/program.md`](autoresearch_skills/program.md) for full details.
+The agent optimizes text-to-image prompts in `train.py` for generating images that satisfy a set of graded criteria. Images are generated via Gemini and evaluated by Claude vision on 6 dimensions (text quality, color palette, layout, label discipline, visual clarity, icon quality). The search uses Pareto front optimization to maintain a diverse set of non-dominated prompts, with two mutation modes -- REFINE for incremental improvement and EXPLORE for radical restructuring when a plateau is detected. Additional features include a feedback history that records past mutation outcomes so the mutator avoids repeating failed strategies, round-robin topic sampling for systematic coverage across all 30 test topics, and a mutation fallback with progressive context truncation for robustness. See [`autoresearch_skills/program.md`](autoresearch_skills/program.md) for full details.
 
 ```bash
 uv sync

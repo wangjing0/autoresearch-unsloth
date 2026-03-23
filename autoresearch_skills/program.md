@@ -1,6 +1,6 @@
 # autoresearch-skills
 
-Autonomous skill prompt optimization using Pareto frontier search. The agent iterates
+Autonomous skill prompt optimization using Pareto front search. The agent iterates
 to find the best generation prompts across 6 evaluation criteria, switching to exploratory
 mutations when progress stalls.
 
@@ -37,19 +37,28 @@ reset and let the agent run again.
 
 The agent decides *how to get there*. It controls the entire optimization strategy: how
 prompts are mutated, how the search explores vs exploits, how failures are diagnosed, and
-how the Pareto frontier is managed.
+how the Pareto front is managed.
 
 - **Mutation templates** (REFINE_TEMPLATE, EXPLORE_TEMPLATE) -- the instructions given to
-  Claude for rewriting prompts based on evaluation feedback.
+  Claude for rewriting prompts based on evaluation feedback. Both templates include a
+  generalization rule requiring changes to work across all 30+ topics (not just patch
+  specific failures), and inject the feedback history so the mutator avoids repeating
+  strategies that already failed.
 - **Bottleneck focus** (BOTTLENECK_FOCUS) -- per-criterion strategies when one dimension
   is the clear weak point.
 - **Adversarial topic generation** (TOPIC_GEN_TEMPLATE, STRESS_INSTRUCTIONS) -- how Claude
   generates stress-test topics that target the weakest criterion.
-- **Pareto frontier logic** (select_parent, find_weakest_criterion, dominates, update_frontier)
+- **Feedback history** (append_feedback, read_feedback_history) -- after each cycle, the
+  mutation outcome (run, mode, weakest criterion, score delta, front membership) is
+  written to `state/feedback_history.jsonl`. The last 10 entries are injected into the
+  mutation templates so the LLM can see what was tried and avoid repeating dead-end strategies.
+- **Pareto front logic** (select_parent, find_weakest_criterion, dominates, update_frontier)
   -- how the population of prompts is managed and parents are selected.
-- **Optimization config** (PLATEAU_WINDOW, EARLY_STOP_WINDOW, ADVERSARIAL_TOPIC_COUNT) --
-  thresholds that control when to switch modes and when to stop.
+- **Optimization config** (PLATEAU_WINDOW, ADVERSARIAL_TOPIC_COUNT) --
+  thresholds that control when to switch modes.
 - **Cycle structure** (run_cycle) -- the generate/evaluate/score/frontier/mutate pipeline.
+  Topic selection uses round-robin cycling through all 30 base topics (via `topic_offset`
+  in state.json), guaranteeing full coverage every ~4 cycles instead of random sampling.
 
 The agent's job is to find the prompt that maximizes the score defined by the human's
 evaluation criteria. It does this by iterating on `train.py` -- changing mutation strategies,
@@ -64,7 +73,7 @@ To set up a new experiment, work with the user to:
 2. **Create the branch**: `git checkout -b autoresearch-skills/<tag>` from current master.
 3. **Read the in-scope files**:
    - `autoresearch_skills/prepare.py` -- fixed constants, eval criteria, eval function, topics, state helpers. Do not modify.
-   - `autoresearch_skills/train.py` -- the file you modify. Pareto frontier logic, mutation templates,
+   - `autoresearch_skills/train.py` -- the file you modify. Pareto front logic, mutation templates,
      adversarial topic generation, optimization hyperparameters, early stopping, and the main loop.
    - `autoresearch_skills/program.md` -- this file. Read it fully before starting.
 4. **Verify environment**: Check that `.env` contains `GOOGLE_API_KEY` and `ANTHROPIC_API_KEY`.
@@ -80,7 +89,7 @@ Once you get confirmation, kick off the experimentation.
 
 Each experiment cycle takes ~2 minutes. The script generates 10 diagrams with the current
 prompt (Gemini image gen), evaluates each against 4 criteria via Claude vision, updates the
-Pareto frontier, then mutates the prompt for the next cycle. You launch it as:
+Pareto front, then mutates the prompt for the next cycle. You launch it as:
 
 ```
 uv run python -m autoresearch_skills.train > run.log 2>&1
@@ -88,7 +97,7 @@ uv run python -m autoresearch_skills.train > run.log 2>&1
 
 **What you CAN do:**
 
-- Modify `autoresearch_skills/train.py` -- this is the only file you edit. All Pareto frontier parameters,
+- Modify `autoresearch_skills/train.py` -- this is the only file you edit. All Pareto front parameters,
   mutation templates, adversarial topic generation, plateau detection, early stopping, and cycle structure
   are fair game.
 
@@ -109,13 +118,16 @@ uv run python -m autoresearch_skills.train > run.log 2>&1
 |---------------------------|-----------------------------|--------------------------------------------------|
 | PLATEAU_WINDOW            | optimization config         | Runs without improvement before switching to EXPLORE mode |
 | ADVERSARIAL_TOPIC_COUNT   | optimization config         | Number of LLM-generated stress-test topics per batch |
-| REFINE_TEMPLATE           | mutation templates          | Prompt given to Claude for incremental mutations  |
-| EXPLORE_TEMPLATE          | mutation templates          | Prompt given to Claude for radical restructuring  |
+| REFINE_TEMPLATE           | mutation templates          | Prompt given to Claude for incremental mutations (includes anti-overfitting rule and feedback history) |
+| EXPLORE_TEMPLATE          | mutation templates          | Prompt given to Claude for radical restructuring (includes anti-repetition text and feedback history) |
 | BOTTLENECK_FOCUS          | mutation templates          | Per-criterion focused instructions when one criterion dominates |
 | TOPIC_GEN_TEMPLATE        | topic generation            | Prompt for generating adversarial topics  |
 | STRESS_INSTRUCTIONS       | topic generation            | Per-criterion stress-test strategies              |
-| select_parent()           | frontier logic              | How parents are chosen from the Pareto frontier   |
+| append_feedback()         | feedback history            | Records mutation outcome to state/feedback_history.jsonl after each cycle |
+| read_feedback_history()   | feedback history            | Reads last N entries from feedback history for injection into mutation templates |
+| select_parent()           | frontier logic              | How parents are chosen from the Pareto front   |
 | find_weakest_criterion()  | frontier logic              | How the weakest dimension is identified           |
+| _mutate_with_fallback()   | mutation resilience         | Retries mutate_prompt with progressively reduced context (20→10→5 failures, 5→3→0 frontier members) if output is unusable |
 
 **Cost** is a soft constraint. Each cycle costs ~$0.50-0.80. Radical changes that dramatically
 increase API calls should be justified by meaningful score improvements.
@@ -128,10 +140,10 @@ default parameters as-is.
 
 ## Optimization Architecture
 
-The system uses **Pareto frontier optimization** across 6 graded criteria instead of greedy
+The system uses **Pareto front optimization** across 6 graded criteria instead of greedy
 hill-climbing on a single scalar score.
 
-**Pareto frontier** (`state/frontier.jsonl`): Non-dominated prompts. Prompt A dominates B if A is
+**Pareto front** (`state/frontier.jsonl`): Non-dominated prompts. Prompt A dominates B if A is
 better on at least one criterion and no worse on all others. Maintains diversity -- prompts with
 different trade-offs coexist.
 
@@ -139,10 +151,26 @@ different trade-offs coexist.
 on the overall weakest criterion.
 
 **Adversarial topics**: Claude generates stress-test topics targeting the weakest criterion.
-Mixed with standard topics from `prepare.py` for each batch.
+Mixed with standard topics from `prepare.py` for each batch. Standard topics are selected
+via round-robin cycling through all 30 base topics (offset tracked in `state.json`), ensuring
+full coverage every ~4 cycles instead of random sampling with potential blind spots.
 
 **Two mutation modes**: REFINE (incremental, default) and EXPLORE (radical restructuring,
 triggered after PLATEAU_WINDOW consecutive cycles without improvement).
+
+**Anti-overfitting guidance**: Both mutation templates instruct the mutator that every change
+must generalize across all 30+ diverse topics, not patch specific failure cases. EXPLORE_TEMPLATE
+also warns against repeating previously attempted restructuring approaches.
+
+**Feedback history** (`state/feedback_history.jsonl`): After each cycle, the outcome (run number,
+mode, weakest criterion, score delta, whether added to the front) is appended. The last 10
+entries are injected into the mutation prompt via `{feedback_history}`, giving the LLM awareness
+of what was already tried so it can explore genuinely new directions.
+
+**Mutation resilience** (`_mutate_with_fallback`): Wraps `mutate_prompt` with three truncation
+levels. If the returned prompt is empty, under 50 characters, or identical to the input, retries
+with progressively less context: 20→10→5 failures, 5→3→0 frontier members. Falls back to the
+current prompt unchanged if all levels fail.
 
 **Bottleneck focus**: When one criterion is clearly the weakest (others at 9+), mutations focus
 exclusively on strategies for that dimension.
@@ -187,7 +215,7 @@ uv run python -m autoresearch_skills.dashboard --port 8501
 
 The dashboard shows: best score, baseline, improvement percentage, frontier size, current
 weakest criterion, mutation mode (REFINE/EXPLORE), score-over-time chart with mode-colored
-dots, Pareto frontier member cards with per-criterion breakdowns, run history table with
+dots, Pareto front member cards with per-criterion breakdowns, run history table with
 mode/weakest/frontier columns, and initial vs best prompt comparison. Auto-refreshes every 15s.
 
 
@@ -197,7 +225,8 @@ improvement. The agent should interpret persistent plateaus as a signal to chang
 in `train.py` before restarting.
 
 **Reset**: To start fresh, run `uv run python -m autoresearch_skills.train --reset`. This clears
-results, state, frontier, best_prompt, and output files while preserving the seed prompt.
+results, state (including `topic_offset`), frontier, best_prompt, feedback history, and output
+files while preserving the seed prompt.
 
 **Timeout**: Each cycle typically finishes in ~2 minutes. If a run exceeds 5 minutes, kill it
 and treat it as a crash.
@@ -242,10 +271,18 @@ and lets the agent run again.
 ```
 autoresearch_skills/
   prepare.py            # Fixed eval harness, constants, topics (human defines -- do not modify)
-  train.py              # Pareto frontier optimization (agent searches -- iterates on this)
+  train.py              # Pareto front optimization (agent searches -- iterates on this)
   dashboard.py          # Live web dashboard (read-only)
   program.md            # This file -- agent instructions
   __init__.py           # Package init
   tests/
     test_suite.py       # Test suite
+  state/
+    state.json          # run_number, best_score, plateau_streak, topic_offset
+    prompt.txt          # Current working prompt (next cycle input)
+    best_prompt.txt     # Prompt that achieved the all-time best score
+    results.jsonl       # One entry per cycle: scores, mode, weakest, frontier_size
+    frontier.jsonl      # Current Pareto front members (non-dominated prompts)
+    feedback_history.jsonl  # Mutation outcomes for LLM context injection
+    diagrams/           # Generated PNG diagrams, one subdirectory per run
 ```

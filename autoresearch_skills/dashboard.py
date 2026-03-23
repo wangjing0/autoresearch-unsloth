@@ -88,7 +88,7 @@ HTML = r"""<!DOCTYPE html>
       <span class="badge badge-live" id="live-badge">LIVE</span>
       <span class="badge badge-mode" id="mode-badge">--</span>
     </div>
-    <div class="subtitle" id="subtitle">Pareto frontier prompt optimization -- refreshes every 15s</div>
+    <div class="subtitle" id="subtitle">Pareto front prompt optimization -- refreshes every 15s</div>
   </div>
 </div>
 

@@ -333,7 +333,7 @@ def test_mutate_prompt_deduplicates_failures():
 
 def test_refine_template_format_fields():
     from autoresearch_skills.train import REFINE_TEMPLATE
-    required_fields = ["current_prompt", "overall", "failures", "focus_instructions", "frontier_context"]
+    required_fields = ["current_prompt", "overall", "failures", "focus_instructions", "frontier_context", "feedback_history"]
     for field in required_fields:
         assert f"{{{field}}}" in REFINE_TEMPLATE, f"REFINE_TEMPLATE missing placeholder '{field}'"
     for c in CRITERIA_KEYS:
@@ -342,13 +342,13 @@ def test_refine_template_format_fields():
 
 def test_explore_template_format_fields():
     from autoresearch_skills.train import EXPLORE_TEMPLATE
-    required_fields = ["current_prompt", "overall", "failures", "frontier_context"]
+    required_fields = ["current_prompt", "overall", "failures", "frontier_context", "feedback_history"]
     for field in required_fields:
         assert f"{{{field}}}" in EXPLORE_TEMPLATE, f"EXPLORE_TEMPLATE missing placeholder '{field}'"
 
 
 # ---------------------------------------------------------------------------
-# train.py: Pareto frontier (uses new 6 criteria)
+# train.py: Pareto front (uses new 6 criteria)
 # ---------------------------------------------------------------------------
 
 def _make_frontier_entry(**overrides):
@@ -498,3 +498,135 @@ def test_state_files_present():
     assert (state_dir / "prompt.txt").exists()
     assert (state_dir / "state.json").exists()
     assert (state_dir / "results.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# train.py: feedback history
+# ---------------------------------------------------------------------------
+
+def test_read_feedback_history_no_file(tmp_path):
+    from autoresearch_skills.train import read_feedback_history
+    with patch("autoresearch_skills.train.FEEDBACK_FILE", tmp_path / "feedback_history.jsonl"):
+        result = read_feedback_history()
+    assert result == "No previous attempts."
+
+
+def test_append_and_read_feedback_history(tmp_path):
+    from autoresearch_skills.train import append_feedback, read_feedback_history
+    fb_file = tmp_path / "feedback_history.jsonl"
+    with patch("autoresearch_skills.train.FEEDBACK_FILE", fb_file):
+        append_feedback(5, "REFINE", "color_palette", "test prompt text here", True, 8.5, 8.2)
+        result = read_feedback_history()
+    assert "Run 5" in result
+    assert "REFINE" in result
+    assert "color_palette" in result
+    assert "ADDED TO FRONTIER" in result
+
+
+def test_append_feedback_not_added(tmp_path):
+    from autoresearch_skills.train import append_feedback, read_feedback_history
+    fb_file = tmp_path / "feedback_history.jsonl"
+    with patch("autoresearch_skills.train.FEEDBACK_FILE", fb_file):
+        append_feedback(3, "EXPLORE", "layout", "some prompt", False, 7.9, 8.2)
+        result = read_feedback_history()
+    assert "not added" in result
+    assert "-0.30" in result
+
+
+def test_read_feedback_history_returns_last_n(tmp_path):
+    from autoresearch_skills.train import append_feedback, read_feedback_history
+    fb_file = tmp_path / "feedback_history.jsonl"
+    with patch("autoresearch_skills.train.FEEDBACK_FILE", fb_file):
+        for i in range(15):
+            append_feedback(i + 1, "REFINE", "layout", f"prompt {i}", False, 7.0, 7.0)
+        result = read_feedback_history(n=5)
+    lines = [l for l in result.split("\n") if l.startswith("- Run")]
+    assert len(lines) == 5
+    assert "Run 15" in result
+    assert "Run 1 |" not in result
+
+
+# ---------------------------------------------------------------------------
+# train.py: round-robin topic sampling
+# ---------------------------------------------------------------------------
+
+def test_round_robin_covers_all_topics():
+    from autoresearch_skills.prepare import TOPICS, BATCH_SIZE
+    from autoresearch_skills.train import ADVERSARIAL_TOPIC_COUNT
+    n_standard = BATCH_SIZE - ADVERSARIAL_TOPIC_COUNT
+    n_topics = len(TOPICS)
+    cycles_to_cover = -(-n_topics // n_standard)  # ceil division
+    seen = set()
+    offset = 0
+    for _ in range(cycles_to_cover):
+        batch = [TOPICS[(offset + i) % n_topics] for i in range(n_standard)]
+        seen.update(batch)
+        offset = (offset + n_standard) % n_topics
+    assert seen == set(TOPICS), "Round-robin should cover all topics within expected cycles"
+
+
+def test_round_robin_deterministic():
+    from autoresearch_skills.prepare import TOPICS, BATCH_SIZE
+    from autoresearch_skills.train import ADVERSARIAL_TOPIC_COUNT
+    n_standard = BATCH_SIZE - ADVERSARIAL_TOPIC_COUNT
+    n_topics = len(TOPICS)
+    offset = 0
+    batch_a = [TOPICS[(offset + i) % n_topics] for i in range(n_standard)]
+    batch_b = [TOPICS[(offset + i) % n_topics] for i in range(n_standard)]
+    assert batch_a == batch_b, "Same offset must always produce same batch"
+
+
+# ---------------------------------------------------------------------------
+# train.py: _mutate_with_fallback
+# ---------------------------------------------------------------------------
+
+def test_mutate_with_fallback_returns_good_result():
+    from autoresearch_skills.train import _mutate_with_fallback
+
+    good_prompt = "a" * 100
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock()]
+    mock_response.content[0].text = good_prompt
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    eval_results = [{"text_quality": 3, "color_palette": 2, "layout": 3, "label_discipline": 3, "visual_clarity": 3, "icon_quality": 3, "failures": []}]
+    result = _mutate_with_fallback(mock_client, "original", eval_results, 7.0, False, None, [], "")
+    assert result == good_prompt
+    assert mock_client.messages.create.call_count == 1
+
+
+def test_mutate_with_fallback_retries_on_short_output():
+    from autoresearch_skills.train import _mutate_with_fallback
+
+    good_prompt = "b" * 100
+    responses = [MagicMock(), MagicMock()]
+    responses[0].content = [MagicMock()]
+    responses[0].content[0].text = "too short"
+    responses[1].content = [MagicMock()]
+    responses[1].content[0].text = good_prompt
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = responses
+
+    eval_results = [{"text_quality": 3, "color_palette": 2, "layout": 3, "label_discipline": 3, "visual_clarity": 3, "icon_quality": 3, "failures": []}]
+    result = _mutate_with_fallback(mock_client, "original", eval_results, 7.0, False, None, [], "")
+    assert result == good_prompt
+    assert mock_client.messages.create.call_count == 2
+
+
+def test_mutate_with_fallback_returns_original_when_all_fail():
+    from autoresearch_skills.train import _mutate_with_fallback
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock()]
+    mock_response.content[0].text = ""
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    eval_results = [{"text_quality": 3, "color_palette": 2, "layout": 3, "label_discipline": 3, "visual_clarity": 3, "icon_quality": 3, "failures": []}]
+    result = _mutate_with_fallback(mock_client, "original prompt", eval_results, 7.0, False, None, [], "")
+    assert result == "original prompt"
+    assert mock_client.messages.create.call_count == 3

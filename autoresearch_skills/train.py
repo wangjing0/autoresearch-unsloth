@@ -38,6 +38,8 @@ from autoresearch_skills.prepare import (
     load_state, save_state, load_prompt, save_prompt,
 )
 
+FEEDBACK_FILE = BASE_DIR / "feedback_history.jsonl"
+
 
 # ===========================================================================
 #  AGENT STRATEGY ZONE -- the search space for prompt optimization
@@ -139,11 +141,15 @@ COMMON FAILURES:
 
 {frontier_context}
 
+PAST MUTATION HISTORY (avoid repeating strategies that did not improve scores):
+{feedback_history}
+
 {focus_instructions}
 
 RULES FOR YOUR MODIFICATION:
 - Target the lowest-scoring criteria first
 - Be specific and imperative -- image models respond to direct commands
+- Generalize: every change must improve diagrams across ALL 30+ diverse topics, not just the specific failures listed above. If you add a rule, ask yourself: would this help for a completely different topic too? Avoid topic-specific or failure-specific patches.
 - Keep prompt under 400 words
 - Return ONLY the new prompt text -- no explanation, no markdown fences"""
 
@@ -164,6 +170,9 @@ FAILURES:
 
 {frontier_context}
 
+PAST MUTATION HISTORY (avoid repeating approaches that already failed):
+{feedback_history}
+
 Try ONE of these radical approaches:
 1. MINIMALIST: Under 150 words. Strip all rule lists. Short direct commands only.
 2. REDUCE TEXT: Use 1-2 word labels max, common short words, icons over text, 4-5 boxes total.
@@ -172,6 +181,7 @@ Try ONE of these radical approaches:
 5. NEGATIVE-SPACE: Focus entirely on bans: "NEVER more than 2 words per label. NEVER words longer than 10 chars."
 
 Be bold. The current approach has provably stalled.
+Generalize: your redesign must work across ALL 30+ diverse topics -- do not optimize for the failures shown above specifically.
 
 Keep under 400 words. Return ONLY the new prompt text -- no explanation, no markdown fences."""
 
@@ -235,20 +245,20 @@ def select_parent(frontier: list[dict], weakest: str) -> dict:
 # ─── Mutation Logic ────────────────────────────────────────────────────────
 
 
-def _collect_failures(eval_results: list[dict]) -> str:
+def _collect_failures(eval_results: list[dict], max_failures: int = 20) -> str:
     all_failures = []
     for r in eval_results:
         for f in r.get("failures", []):
             all_failures.append(f)
-    unique = list(dict.fromkeys(all_failures))[:20]
+    unique = list(dict.fromkeys(all_failures))[:max_failures]
     return "\n".join(f"- {f}" for f in unique) if unique else "- None"
 
 
-def _frontier_context(frontier: list[dict]) -> str:
+def _frontier_context(frontier: list[dict], max_members: int = 5) -> str:
     if len(frontier) <= 1:
         return ""
     lines = ["OTHER FRONTIER PROMPTS (different trade-offs that also performed well):"]
-    for i, m in enumerate(frontier[:5]):
+    for i, m in enumerate(frontier[:max_members]):
         s10 = m.get("scores", {})
         parts = ", ".join(f"{c}={s10.get(c, 0)}/10" for c in CRITERIA)
         lines.append(f"  Prompt {i+1}: {parts} (overall={m.get('overall', 0)}/10)")
@@ -256,6 +266,43 @@ def _frontier_context(frontier: list[dict]) -> str:
         lines.append(f"    Preview: {preview}...")
     lines.append("Consider borrowing techniques from prompts that score high on your weak criterion.")
     return "\n".join(lines)
+
+
+def append_feedback(run_num: int, mode: str, weakest: str, new_prompt: str, frontier_added: bool, score: float, prior_best: float) -> None:
+    """Append a mutation outcome entry to the feedback history file."""
+    entry = {
+        "run": run_num,
+        "mode": mode,
+        "weakest": weakest,
+        "prompt_preview": new_prompt[:120].replace("\n", " "),
+        "frontier_added": frontier_added,
+        "score": round(score, 4),
+        "prior_best": round(prior_best, 4),
+        "delta": round(score - prior_best, 4),
+    }
+    with open(FEEDBACK_FILE, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def read_feedback_history(n: int = 10) -> str:
+    """Return the last n mutation outcomes as human-readable text."""
+    if not FEEDBACK_FILE.exists():
+        return "No previous attempts."
+    raw_lines = [l for l in FEEDBACK_FILE.read_text().strip().split("\n") if l.strip()]
+    recent = raw_lines[-n:]
+    entries = []
+    for line in recent:
+        try:
+            e = json.loads(line)
+            outcome = "ADDED TO FRONTIER" if e.get("frontier_added") else "not added (dominated)"
+            entries.append(
+                f"- Run {e['run']} | {e['mode']} | weakest: {e['weakest']} | {outcome} | "
+                f"score={e['score']} (delta={e['delta']:+.2f})\n"
+                f"  Prompt: {e.get('prompt_preview', '')[:100]}..."
+            )
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return "\n".join(entries) if entries else "No previous attempts."
 
 
 def mutate_prompt(
@@ -266,17 +313,21 @@ def mutate_prompt(
     explore: bool = False,
     bottleneck: str | None = None,
     frontier: list[dict] | None = None,
+    feedback_history: str = "",
+    max_failures: int = 20,
+    max_frontier: int = 5,
 ) -> str:
     """Use Claude to improve the prompt based on failure analysis."""
     scores = score_batch(eval_results)
-    failures_text = _collect_failures(eval_results)
+    failures_text = _collect_failures(eval_results, max_failures=max_failures)
     s10 = scores["scores"]
 
     focus_instructions = ""
     if bottleneck and bottleneck in BOTTLENECK_FOCUS:
         focus_instructions = BOTTLENECK_FOCUS[bottleneck]
 
-    frontier_ctx = _frontier_context(frontier or [])
+    frontier_ctx = _frontier_context(frontier or [], max_members=max_frontier)
+    history_text = feedback_history or "No previous attempts."
 
     template = EXPLORE_TEMPLATE if explore else REFINE_TEMPLATE
     mutation_prompt = template.format(
@@ -291,6 +342,7 @@ def mutate_prompt(
         failures=failures_text,
         focus_instructions=focus_instructions,
         frontier_context=frontier_ctx,
+        feedback_history=history_text,
     )
 
     response = anthropic_client.messages.create(
@@ -304,12 +356,12 @@ def mutate_prompt(
 # ===========================================================================
 #  SYSTEM INFRASTRUCTURE -- do not modify during optimization runs
 #
-#  Pareto frontier mechanics, image generation, cycle orchestration, and
+#  Pareto front mechanics, image generation, cycle orchestration, and
 #  the entry point. Changes here affect the optimization loop itself, not
 #  the search strategy.
 # ===========================================================================
 
-# ─── Pareto Frontier ───────────────────────────────────────────────────────
+# ─── Pareto Front ──────────────────────────────────────────────────────────
 
 
 def dominates(a: dict, b: dict) -> bool:
@@ -401,11 +453,50 @@ def generate_one(gemini_client, prompt: str, topic: str, output_path: Path) -> b
         return False
 
 
+# ─── Mutation Fallback ─────────────────────────────────────────────────────
+
+
+def _mutate_with_fallback(
+    anthropic_client,
+    current_prompt: str,
+    eval_results: list[dict],
+    best_score: float,
+    explore: bool,
+    bottleneck: str | None,
+    frontier: list[dict],
+    feedback_history: str,
+) -> str:
+    """Call mutate_prompt with progressively reduced context on poor output.
+
+    Three truncation levels:
+      0 -- full context (20 failures, 5 frontier members)
+      1 -- moderate  (10 failures, 3 frontier members)
+      2 -- minimal   ( 5 failures, no frontier context)
+    Returns current_prompt unchanged if all levels produce unusable output.
+    """
+    levels = [(20, 5), (10, 3), (5, 0)]
+    for level, (max_failures, max_frontier) in enumerate(levels):
+        new_prompt = mutate_prompt(
+            anthropic_client, current_prompt, eval_results, best_score,
+            explore=explore, bottleneck=bottleneck,
+            frontier=frontier[:max_frontier] if max_frontier else [],
+            feedback_history=feedback_history,
+            max_failures=max_failures,
+            max_frontier=max_frontier,
+        )
+        if new_prompt and len(new_prompt) > 50 and new_prompt.strip() != current_prompt.strip():
+            return new_prompt
+        if level < len(levels) - 1:
+            print(f"  Mutation output unusable (level {level}), retrying with reduced context...")
+    print("  All mutation levels failed -- keeping current prompt.")
+    return current_prompt
+
+
 # ─── Main Cycle ────────────────────────────────────────────────────────────
 
 
 def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
-    """Run one Pareto frontier optimization cycle."""
+    """Run one Pareto front optimization cycle."""
     run_num = state["run_number"] + 1
     state["run_number"] = run_num
     run_dir = DIAGRAMS_DIR / f"run_{run_num:03d}"
@@ -428,8 +519,10 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
             prompt = load_prompt()
 
     n_standard = BATCH_SIZE - ADVERSARIAL_TOPIC_COUNT
-    topic_rng = random.Random(run_num)
-    standard_topics = topic_rng.sample(TOPICS, min(n_standard, len(TOPICS)))
+    topic_offset = state.get("topic_offset", 0)
+    n_topics = len(TOPICS)
+    standard_topics = [TOPICS[(topic_offset + i) % n_topics] for i in range(min(n_standard, n_topics))]
+    state["topic_offset"] = (topic_offset + n_standard) % n_topics
     adversarial_topics = generate_adversarial_topics(anthropic_client, weakest)
     topics = standard_topics + adversarial_topics
     random.shuffle(topics)
@@ -529,7 +622,7 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     with open(RESULTS_FILE, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
 
-    # ── Update Pareto frontier ────────────────────────────────────
+    # ── Update Pareto front ────────────────────────────────────
     candidate = {c: s10[c] for c in CRITERIA}
     candidate.update({"prompt": prompt, "scores": s10, "overall": overall, "run": run_num})
     frontier, added = update_frontier(frontier, candidate)
@@ -541,6 +634,7 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
         print(f"\n  FRONTIER: Dominated (frontier size: {len(frontier)})")
 
     # ── Also track simple best ────────────────────────────────────
+    prior_best = state["best_score"]
     if overall > state["best_score"]:
         state["best_score"] = overall
         state["plateau_streak"] = 0
@@ -549,17 +643,22 @@ def run_cycle(gemini_client, anthropic_client, state: dict) -> dict:
     else:
         state["plateau_streak"] = state.get("plateau_streak", 0) + 1
 
+    # ── Record mutation outcome for future reference ───────────────
+    append_feedback(run_num, mode, weakest, prompt, added, overall, prior_best)
+
     # ── Mutate ────────────────────────────────────────────────────
     if overall < MAX_SCORE:
         bottleneck_name = weakest if s10.get(weakest, 10) < 5.0 else None
         if bottleneck_name:
             print(f"  Bottleneck: {bottleneck_name}")
 
+        history_text = read_feedback_history()
         print(f"  Mutating prompt ({mode} mode)...")
-        new_prompt = mutate_prompt(
+        new_prompt = _mutate_with_fallback(
             anthropic_client, prompt, eval_results,
             state["best_score"], explore=is_plateau,
             bottleneck=bottleneck_name, frontier=frontier,
+            feedback_history=history_text,
         )
         save_prompt(new_prompt)
         print(f"  New prompt ({len(new_prompt)} chars):")
@@ -585,15 +684,16 @@ def main():
     if args.reset:
         import shutil
         RESULTS_FILE.write_text("")
-        save_state({"best_score": -1, "run_number": 0, "plateau_streak": 0})
+        save_state({"best_score": -1, "run_number": 0, "plateau_streak": 0, "topic_offset": 0})
         FRONTIER_FILE.unlink(missing_ok=True)
         BEST_PROMPT_FILE.unlink(missing_ok=True)
         PROMPT_FILE.unlink(missing_ok=True)
+        FEEDBACK_FILE.unlink(missing_ok=True)
         diagrams = DIAGRAMS_DIR
         if diagrams.exists():
             shutil.rmtree(diagrams)
             diagrams.mkdir(parents=True)
-        print("Reset: cleared results, state, frontier, prompt, best_prompt, and output files. New run will start from scratch.")
+        print("Reset: cleared results, state, frontier, prompt, best_prompt, feedback history, and output files. New run will start from scratch.")
 
     if not GEMINI_KEY:
         print("ERROR: GOOGLE_API_KEY not set", file=sys.stderr)
@@ -612,7 +712,7 @@ def main():
     anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     state = load_state()
 
-    print("Autoresearch Pareto Frontier Optimization")
+    print("Autoresearch Pareto Front Optimization")
     print(f"  Gen model:    {GEN_MODEL}")
     print(f"  Eval model:   {EVAL_MODEL}")
     print(f"  Mutate model: {MUTATE_MODEL}")
