@@ -59,6 +59,8 @@ uv run python -m autoresearch_unsloth.plot_progress    # outputs progress_unslot
 uv run python -m autoresearch_skills.dashboard          # live web dashboard at localhost:8501
 ```
 
+![Skills Autoresearch Dashboard](autoresearch_skills/dashboard.png)
+
 ## References
 
 - [karpathy/autoresearch](https://github.com/karpathy/autoresearch) (original)
