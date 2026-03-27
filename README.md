@@ -4,6 +4,18 @@ Autonomous LLM research loops -- give an AI agent a training setup and let it ex
 
 All three modules share the same prerequisites: [uv](https://docs.astral.sh/uv/). GPU and API key requirements vary by module.
 
+## Paradigm
+| **Architecture** | **Metrics** (The "Judge") | **Dataset** (Sample of Ground Truth) | **Paradigm** | **Example** |
+| :---: | :---: | :---: | :---: | :---: |
+| **Defined** | **Defined** <br> (Loss Functions) | **Static** <br> (Curated Benchmark) | **Traditional ML** <br> (Supervised and self-supervised Learning)| Karpathy's Autoresearch |
+| **Defined** | **Defined** <br> (Proxy Reward Model) | **Generated** <br> (in controlled environment) | **RL** <br> (Human preference alignment) | Autoresearch-skills |
+| **Learned** | **Goal driven** | **Generated** <br> (in real-world environment) | **Agentic AI** <br> (Meta-learning and self-evolving)| ??? |
+
+
+* **Sample of Truth:** A controlled snapshot of data that may not fully represent the complexity or non-stationarity of the real world.
+* **The "Judge":** The mechanism that determines "correctness." In advanced systems, this shifts from external human labels to internal consistency or environmental survival.
+* **Learned Architecture:** Systems capable of structural mutation (e.g., adding nodes/layers) or rewriting their own underlying code in response to environmental shifts.
+
 ## Modules
 
 ### autoresearch -- GPT architecture search
@@ -66,6 +78,8 @@ uv run python -m autoresearch_skills.dashboard          # live web dashboard at 
 - [karpathy/autoresearch](https://github.com/karpathy/autoresearch) (original)
 - [unslothai/unsloth](https://docs.unsloth.ai/get-started/unsloth-notebooks)
 - [Pareto front](https://en.wikipedia.org/wiki/Pareto_front)
+
+
 
 ## License
 
