@@ -1,20 +1,20 @@
-# autoresearch
+## Paradigms
 
-Autonomous LLM research loops -- give an AI agent a training setup and let it explore the hyperparameter space. The repo contains three independent modules that each follow the same pattern: an agent edits a training script, runs an experiment under a fixed budget, evaluates the result against a target metric, and repeats.
-
-All three modules share the same prerequisites: [uv](https://docs.astral.sh/uv/). GPU and API key requirements vary by module.
-
-## Paradigm
 | **Architecture** | **Metrics** (The "Judge") | **Dataset** (Sample of Ground Truth) | **Paradigm** | **Example** |
 | :---: | :---: | :---: | :---: | :---: |
-| **Defined** | **Defined** <br> (Loss Functions) | **Static** <br> (Curated Benchmark) | **Traditional ML** <br> (Supervised and self-supervised Learning)| Karpathy's Autoresearch |
-| **Defined** | **Defined** <br> (Proxy Reward Model) | **Generated** <br> (in controlled environment) | **RL** <br> (Human preference alignment) | Autoresearch-skills |
-| **Learned** | **Goal driven** | **Generated** <br> (in real-world environment) | **Agentic AI** <br> (Meta-learning and self-evolving)| ??? |
+| Defined | Defined<br>(Loss Functions) | Static<br>(Curated Benchmark) | **Traditional ML**<br>Supervised & self-supervised learning | Karpathy's Autoresearch |
+| Defined | Defined<br>(Proxy Reward Model) | Generated<br>(controlled environment) | **RL**<br>Human preference alignment | Autoresearch-skills |
+| Learned | Goal-driven | Generated<br>(real-world environment) | **Agentic AI**<br>Meta-learning & self-evolving | ??? |
 
 
 * **Sample of Truth:** A controlled snapshot of data that may not fully represent the complexity or non-stationarity of the real world.
 * **The "Judge":** The mechanism that determines "correctness." In advanced systems, this shifts from external human labels to internal consistency or environmental survival.
 * **Learned Architecture:** Systems capable of structural mutation (e.g., adding nodes/layers) or rewriting their own underlying code in response to environmental shifts.
+
+## What is Autoresearch?
+Autonomous LLM research loops -- give an AI agent a training setup and let it explore the hyperparameter space. The repo contains three independent modules that each follow the same pattern: an agent edits a training script, runs an experiment under a fixed budget, evaluates the result against a target metric, and repeats.
+
+All three modules share the same prerequisites: [uv](https://docs.astral.sh/uv/). GPU and API key requirements vary by module.
 
 ## Modules
 
